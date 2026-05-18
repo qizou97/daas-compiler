@@ -48,6 +48,13 @@ def test_run_he_nucleus_segmentation_raises_if_nothing_created():
             run_he_nucleus_segmentation(sdata, image_key="he_image")
 
 
+def test_run_he_nucleus_segmentation_raises_if_sopa_not_installed():
+    sdata = _make_sdata(["cell_circles"])
+    with patch.dict("sys.modules", {"sopa": None, "sopa.segmentation": None}):
+        with pytest.raises(ImportError):
+            run_he_nucleus_segmentation(sdata, image_key="he_image")
+
+
 # ── filter_by_nucleus_overlap ────────────────────────────────────────────────
 
 def _rect(x0, y0, x1, y1):
