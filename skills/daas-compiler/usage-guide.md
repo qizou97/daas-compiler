@@ -4,6 +4,8 @@
 
 This skill covers extracting cell-centered H&E image patches from SpatialData objects into an indexed WebDataset for machine learning model training. It handles MPP derivation from affine transforms, OOB cell filtering, spatial sorting for cache locality, wsidata/lazyslide-based tile extraction, and alignment with gene expression data in h5ad format.
 
+It also supports an optional **self-contained bundled WebDataset** output (each cell packaged as JPEG + sparse expression in one tar entry), so training can skip mmap and h5ad entirely. Three loading paths are available downstream: `CellPatchDataset` (mmap, fastest), `BundledCellPatchDataset` (no mmap, self-contained), and the canonical `webdataset` library pipeline.
+
 ## Prerequisites
 
 ```bash
@@ -34,6 +36,9 @@ Tell your AI agent what you want to do:
 ### With specific config
 > "Build a patch dataset from /data/sample.zarr. HE image is 'he_image', centroids from 'cell_circles', expression from table 'table'. Use wsidata for all tiling."
 
+### Bundled WebDataset for training without mmap
+> "Compile my per-sample dirs at /data/out into /data/compiled and ALSO write a bundled WebDataset (each cell as jpg + sparse expression + json in one tar). Use `--bundle-wds`."
+
 ## What the Agent Will Do
 
 1. **Inspect** the SpatialData structure and report all elements (images, shapes, tables, labels, points)
@@ -50,6 +55,19 @@ Tell your AI agent what you want to do:
 9. **Write WebDataset** shards with binary .idx for O(1) random access
 10. **Save aligned h5ad** with expression data in patch sample_index order
 11. **Validate** with 6-point verification suite including random access checks
+12. **(Compile step)** Merge per-sample dirs into a global manifest + h5ad. With `--bundle-wds`, also write `{compiled}/wds/` with each cell as a self-contained tar entry (jpg + sparse `.expr.npz` + json), plus `gene_panel.json` for column order.
+
+## Training the compiled dataset
+
+Three loading paths produce the same `{image, expression, cell_id, sample_id}` shape:
+
+| Path | When | Class / API |
+|---|---|---|
+| mmap | fastest per-cell read, random access at scale | `daas.dataset.CellPatchDataset(manifest_path, h5ad_path, ...)` |
+| bundled (no mmap) | shipping one self-contained dir, bounded memory | `daas.dataset.BundledCellPatchDataset(wds_dir, ...)` |
+| pure `webdataset` library | streaming pipelines, library-canonical workers | `webdataset.WebDataset(urls).decode(...)` — see `examples/wds_only_example.py` |
+
+The bundled and pure-wds paths require `--bundle-wds` on compile.
 
 ## Tips
 
