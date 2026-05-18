@@ -302,7 +302,7 @@ def main():
         assert tile.image.shape == (PATCH_SIZE, PATCH_SIZE, 3)
         assert tile.image.dtype == np.uint8
         grid_images.append(tile.image)
-    _save_patch_grid(grid_images, cell_ids_ord[grid_idx],
+    _save_patch_grid(grid_images, [cell_ids_ord[i] for i in grid_idx],
                      sx0_ord[grid_idx], sy0_ord[grid_idx],
                      sdata, SCALE_SHAPE, PATCH_SIZE, BASE_SIZE,
                      sample_id, viz_dir)
