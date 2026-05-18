@@ -414,7 +414,7 @@ def main():
     cells_df.to_parquet(output_dir / "manifest.parquet", index=False)
 
     # ── Phase 8c: Post-save viz (reads from actual tar shards) ───────────────
-    print("[8c] Post-save patch grid validation …")
+    print("[8c/9] Post-save patch grid validation …")
     saved_viz_result = save_saved_patch_grid(
         manifest_df=cells_df,
         sdata=sdata,
@@ -443,6 +443,9 @@ def main():
         cell_id_column=args.cell_id_column,
         overlay_keys_used=[k for k in [tissue_key, cell_key, nucleus_key] if k],
     )
+    print(f"      validate: n_checked={validate_report['n_checked']}  "
+          f"bad_size={validate_report['bad_image_size']}  "
+          f"overlay_keys={validate_report['overlay_keys_used']}")
 
     total_mb = sum(f.stat().st_size for f in output_dir.glob("*.tar")) / 1e6
     elapsed  = time.time()-t0
@@ -469,8 +472,6 @@ print(adata)  # AnnData ({n_out}, {adata.n_vars})
 def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size,
               cell_id_column: str = "cell_id",
               overlay_keys_used: list | None = None) -> dict:
-    import io, tarfile
-    from PIL import Image
     if n_out == 0:
         raise ValueError(
             "No cells survived filtering — nothing to validate. "
