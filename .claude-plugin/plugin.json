@@ -1,7 +1,7 @@
 {
   "name": "daas-compiler",
   "description": "Compile SpatialData zarr samples into cell-centered HE patch WebDataset for ML training (extract → compile → train)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": { "name": "qizou97" },
   "homepage": "https://github.com/qizou97/daas-compiler",
   "repository": "https://github.com/qizou97/daas-compiler",

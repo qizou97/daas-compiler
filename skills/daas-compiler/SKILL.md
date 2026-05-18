@@ -468,6 +468,46 @@ batch  = next(iter(loader))
 
 Pick `BundledCellPatchDataset` when training infra disallows large mmap working sets, or when shipping a single tarballed dataset to a different machine.
 
+### Pure-`webdataset` loader (no daas classes)
+
+For users who prefer the canonical `webdataset` library — streaming pipeline, shard-aware multi-worker sharding, declarative decoders — `compiled/wds/` is directly compatible. A worked example lives at:
+
+```
+${SKILL_DIR}/examples/wds_only_example.py
+```
+
+Key points it demonstrates:
+- Brace-expansion URL syntax: `shard-{000000..000099}.tar` reads many shards at once.
+- Custom decoder for `.expr.npz` reconstructs the dense vector from `(indices, values)`.
+- `wds.WebLoader` for PyTorch-compatible multi-worker iteration.
+
+Install the optional dep:
+
+```bash
+pip install -e "${SKILL_DIR}[wds]"   # pulls webdataset>=0.2
+```
+
+Sketch of the pipeline (full file in `examples/wds_only_example.py`):
+
+```python
+import json, io, numpy as np, webdataset as wds
+N_GENES = len(json.load(open("compiled/wds/gene_panel.json")))
+
+def decode_expr_npz(data):
+    npz = np.load(io.BytesIO(data))
+    expr = np.zeros(N_GENES, dtype=np.float32)
+    expr[npz["indices"]] = npz["values"]
+    return expr
+
+ds = (
+    wds.WebDataset("compiled/wds/shard-{000000..000099}.tar")
+    .decode("pil",
+            wds.handle_extension("expr.npz", decode_expr_npz),
+            wds.handle_extension("json", lambda d: json.loads(d)))
+    .to_tuple("jpg", "expr.npz", "json")
+)
+```
+
 ### LRU mmap cache
 
 Each DataLoader worker inherits an empty cache (Linux fork semantics) and builds its own. No cross-worker sharing.
