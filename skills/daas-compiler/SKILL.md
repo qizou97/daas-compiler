@@ -176,7 +176,13 @@ Never use numpy/dask/zarr/PIL/cv2 to read HE pixel data directly.
 
 ### Extraction Strategies
 
-Three strategies are available via `--extract-mode`. The user should choose based on memory availability and speed requirements.
+> **Required: ask the user which `--extract-mode` to use before running any extraction.**
+> The three modes have very different memory and speed profiles; the right
+> choice depends on the user's hardware. Do NOT default silently. Present the
+> table below, ask the user to pick one of `tile_images`, `full_scale0`, or
+> `full_ops_level`, and pass that choice as `--extract-mode <choice>` on the
+> CLI. This applies to both `extract_sample.py` (single sample) and
+> `extract_all.py` (batch — forwards the flag to every worker).
 
 | Strategy | `--extract-mode` | Memory | Speed (3000 tiles) | Quality |
 |----------|------------------|--------|---------------------|---------|

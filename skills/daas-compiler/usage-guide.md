@@ -41,14 +41,15 @@ Tell your AI agent what you want to do:
 3. **Present config** for your confirmation before processing
 4. **Filter cells**: remove OOB (out-of-bounds) and zero-expression cells
 5. **Spatial sort** cells by zarr chunk for efficient I/O
-6. **Extract patches** using one of three strategies (user chooses):
-   - `tile_images` (default) — wsidata iterator, low memory, slow
+6. **Ask which extract mode to use** — the agent must prompt before running extraction. Pick one of:
+   - `tile_images` — wsidata iterator, low memory (~50 MB), slow (1×)
    - `full_ops_level` (recommended) — load ops_level into memory, 36× faster, ~0.4 GB
    - `full_scale0` — load scale0 into memory, 9× faster, ~1.6 GB
-7. **Write WebDataset** shards with binary .idx for O(1) random access
-8. **Save aligned h5ad** with expression data in patch sample_index order
-9. **Validate** with 6-point verification suite including random access checks
-10. **Generate visualizations**: tile overview, centroid overlay, example patches
+7. **Extract patches** using the chosen mode
+8. **Write WebDataset** shards with binary .idx for O(1) random access
+9. **Save aligned h5ad** with expression data in patch sample_index order
+10. **Validate** with 6-point verification suite including random access checks
+11. **Generate visualizations**: tile overview, centroid overlay, example patches
 
 ## Tips
 
@@ -59,6 +60,6 @@ Tell your AI agent what you want to do:
 - **OOB cells are skipped entirely** — no padding, no partial extraction, no resizing of clipped regions
 - **Spatial sort** groups tiles by zarr chunk, improving cache hit rate ~2x
 - **Binary .idx** format enables random access without sequential tar scan
-- **Extraction mode** — `--extract-mode full_ops_level` for 36× speedup (loads ~0.4GB); use `tile_images` only when memory < 1GB. See SKILL.md for benchmarks.
+- **Extraction mode is a required choice, not a default** — the agent will ask which of `tile_images`, `full_ops_level`, or `full_scale0` to use before running. Picking `full_ops_level` gives 36× speedup at ~0.4 GB memory; pick `tile_images` only when memory < 1 GB. See SKILL.md for benchmarks.
 - **h5ad output** contains only valid cells in sample_index order with full alignment metadata
 - **Patches are JPEG quality=95** — balance between file size and image quality for ML training
