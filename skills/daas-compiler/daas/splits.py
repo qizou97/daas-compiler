@@ -13,6 +13,7 @@ Supports the following split policies:
 from __future__ import annotations
 
 import json
+import warnings as _warnings_module
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,9 @@ SUPPORTED_POLICIES: set[str] = {
     "ratio_by_group",
     "group_kfold",
     "existing_file",
-    "defer_split",
+    # NOTE: defer_split is intentionally excluded here; it is recognized by
+    # build_split_membership but always raises. Callers should skip calling
+    # build_split_membership entirely when policy is defer_split.
 }
 
 _REQUIRED_MANIFEST_COLS = {"global_idx", "sample_id", "cell_id"}
@@ -86,9 +89,19 @@ def _build_sample_holdout(
                 )
             seen.add(s)
 
-    # Check all manifest samples are assigned
+    # Check for phantom sample_ids not present in manifest
+    train_s = set(train_samples)
+    val_s = set(val_samples)
+    test_s = set(test_samples)
     manifest_samples = set(manifest["sample_id"].unique())
-    assigned_samples = set(all_assigned)
+    extra = (train_s | val_s | test_s) - manifest_samples
+    if extra:
+        raise ValueError(
+            f"sample_holdout: sample_ids in split lists not found in manifest: {sorted(extra)}"
+        )
+
+    # Check all manifest samples are assigned
+    assigned_samples = train_s | val_s | test_s
     unassigned = manifest_samples - assigned_samples
     if unassigned:
         raise ValueError(
@@ -137,9 +150,15 @@ def _build_ratio_by_group(
     n = len(groups)
     n_train = max(1, round(n * train_frac))
     n_val = max(0, round(n * val_frac))
-    # ensure we don't exceed total
-    if n_train + n_val >= n:
-        n_val = max(0, n - n_train - 1)
+    # ensure we don't exceed total; warn if clamping changes n_val
+    if n_train + n_val >= n and n > 0:
+        actual_n_val = max(0, n - n_train - 1)
+        if actual_n_val != n_val:
+            _warnings_module.warn(
+                f"ratio_by_group: requested val_frac={ratios[1]:.2f} with n={n} groups; "
+                f"adjusted n_val from {n_val} to {actual_n_val} to guarantee at least 1 test group."
+            )
+        n_val = actual_n_val
 
     group_to_split: dict[Any, str] = {}
     for i, g in enumerate(groups):
@@ -175,6 +194,11 @@ def _build_group_kfold(
     if group_column not in manifest.columns:
         raise ValueError(
             f"group_column {group_column!r} not found in manifest columns"
+        )
+    if fold is not None and not (0 <= fold < n_folds):
+        raise ValueError(
+            f"group_kfold: fold={fold} is out of range for n_folds={n_folds}. "
+            f"fold must be in range [0, {n_folds - 1}]."
         )
 
     rng = np.random.default_rng(seed)
@@ -225,6 +249,15 @@ def _build_existing_file(
 
     has_global_idx = "global_idx" in ext_df.columns
     has_sample_id = "sample_id" in ext_df.columns
+
+    # For global_idx-level joins, deduplicate to prevent row multiplication
+    if has_global_idx:
+        dupes = ext_df[ext_df.duplicated("global_idx", keep=False)]
+        if not dupes.empty:
+            _warnings_module.warn(
+                f"split_file has {len(dupes)} duplicate global_idx rows; keeping first occurrence."
+            )
+            ext_df = ext_df.drop_duplicates(subset=["global_idx"], keep="first")
 
     if has_global_idx and not has_sample_id:
         # global_idx join
@@ -375,6 +408,13 @@ def validate_split_membership(
     if extra:
         raise ValueError(
             f"split_membership contains global_idx values not in manifest: {sorted(extra)}"
+        )
+
+    # Any manifest global_idx missing from sm → hard error
+    missing_from_sm = manifest_idx - sm_idx
+    if missing_from_sm:
+        raise ValueError(
+            f"{len(missing_from_sm)} manifest cells have no split assignment in split_membership"
         )
 
     # Duplicate global_idx in sm → hard error

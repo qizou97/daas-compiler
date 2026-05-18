@@ -451,3 +451,49 @@ def test_validate_leakage_warning_returned(manifest_6cells):
     warnings = validate_split_membership(sm, manifest_6cells)
     assert len(warnings) == 1
     assert "DAAS did not generate" in warnings[0]
+
+
+# ── new tests for code-review fixes ──────────────────────────────────────────
+
+
+def test_sample_holdout_phantom_sample_raises(manifest_6cells):
+    """sample_ids in split lists that don't exist in manifest → ValueError."""
+    with pytest.raises(ValueError, match="not found in manifest"):
+        build_split_membership(
+            manifest_6cells,
+            policy="sample_holdout",
+            task="gene_pred",
+            train_samples=["A", "TYPO"],
+            val_samples=["B"],
+            test_samples=["C"],
+        )
+
+
+def test_validate_missing_coverage_raises(manifest_6cells):
+    """split_membership that omits some manifest cells → ValueError."""
+    sm = build_split_membership(
+        manifest_6cells,
+        policy="sample_holdout",
+        task="gene_pred",
+        train_samples=["A"],
+        val_samples=["B"],
+        test_samples=["C"],
+    )
+    # Remove cells belonging to sample C so manifest has uncovered global_idx values
+    sm_partial = sm[sm["sample_id"] != "C"].copy().reset_index(drop=True)
+    with pytest.raises(ValueError, match="manifest cells have no split assignment"):
+        validate_split_membership(sm_partial, manifest_6cells)
+
+
+def test_group_kfold_out_of_range_fold_raises(manifest_with_group):
+    """fold index out of [0, n_folds-1] → ValueError."""
+    with pytest.raises(ValueError, match="out of range"):
+        build_split_membership(
+            manifest_with_group,
+            policy="group_kfold",
+            task="gene_pred",
+            group_column="patient",
+            n_folds=2,
+            seed=0,
+            fold=5,
+        )
