@@ -35,6 +35,127 @@ use; never hardcode a path.
 
 ---
 
+## Stage-Based Workflow
+
+Extract cell-centered patches by composing stages. Each stage writes a new
+table key back into the zarr; the final key flows into `extract_sample.py`.
+
+```
+sdata.zarr
+    │
+    │  [Stage 0: inspect]  always first — verify keys
+    │
+    │  [Stage 1–N: filter]  optional, any combination, in order:
+    │    filter_tissue.py          → writes table_tissue
+    │    filter_nucleus_presence.py → writes table_tissue_nucleus
+    │    filter_nucleus_overlap.py  → writes table_tissue_nucleus_he
+    │
+    │  [Stage N+1: extract]  per-sample, parallelizable
+    │    extract_sample.py --table-key <FINAL_KEY>
+    │
+    │  [Stage N+2: compile]  once all samples done
+    │    compile_dataset.py [--samples A,B,C] [--bundle-wds]
+    ▼
+compiled/  or  per-sample bundled WebDataset shards
+```
+
+### filtered_table is optional
+
+`filtered_table` is not required. It is one possible `--input-table-key` value.
+If your zarr has a pre-existing `filtered_table`, pass it:
+`--input-table-key filtered_table` to the first stage script you run.
+
+### Building a stage plan from natural language
+
+Use `daas.planning.parse_stage_plan()` and `render_cli()`:
+
+```python
+from daas.planning import parse_stage_plan, render_cli
+
+plan = parse_stage_plan(
+    "filter outside tissue, keep nucleus boundaries, "
+    "mpp=0.5, patch size 224, use optim_ops_level, sample 3000 cells per sample"
+)
+print(render_cli(plan, ["/data/A_001.zarr"], "/data/out"))
+```
+
+Trigger phrase → stage mapping:
+
+| Phrase | Stage |
+|---|---|
+| "inside tissue", "out of tissue", "outside tissue" | tissue_inside |
+| "with nucleus boundaries", "only cells with nucleus" | nucleus_presence |
+| "Xenium nucleus overlaps HE nucleus", "overlap >" | xenium_he_nucleus_overlap |
+| "optim_ops_level", "ops_level" | extract_mode=full_ops_level |
+| "sample N cells per sample" | --n-sample N |
+
+### Stage report contract
+
+Every stage script writes a JSON to `--report-dir`:
+
+```json
+{
+  "stage": "nucleus_presence",
+  "input_table_key": "table_tissue",
+  "output_table_key": "table_tissue_nucleus",
+  "n_cells_in": 184523,
+  "n_cells_out": 173210,
+  "drop_counts_by_reason": {"missing_nucleus_boundary": 11313},
+  "warnings": []
+}
+```
+
+### Worked example
+
+Request:
+> "Process A_001,A_002,A_004 under /home/zouqi/datasets/mash/spatialdata into
+> cell-centered HE patches. Filter out cells outside tissue and only keep cells
+> with nucleus boundaries. Target mpp=0.5, patch size=224, use optim_ops_level,
+> output to /home/zouqi/datasets/mash/stvisuome, sample 3000 cells per sample,
+> compile, and write bundled WebDataset shards."
+
+Stage plan resolves to:
+- stages: `tissue_inside` → `nucleus_presence`
+- final table key: `table_tissue_nucleus`
+- extract: `--extract-mode full_ops_level --mpp 0.5 --patch-size 224 --n-sample 3000`
+- compile: `--samples A_001,A_002,A_004 --bundle-wds`
+
+Generated CLI (run in order):
+```bash
+# Stage 0: inspect
+python3 ${SKILL_DIR}/scripts/inspect_spatialdata.py --zarr .../A_001.zarr
+# (repeat for A_002, A_004)
+
+# Stage 1: tissue_inside
+python3 ${SKILL_DIR}/scripts/filter_tissue.py \
+    --zarr .../A_001.zarr \
+    --input-table-key table --output-table-key table_tissue
+# (repeat for A_002, A_004)
+
+# Stage 2: nucleus_presence
+python3 ${SKILL_DIR}/scripts/filter_nucleus_presence.py \
+    --zarr .../A_001.zarr \
+    --input-table-key table_tissue --output-table-key table_tissue_nucleus
+# (repeat for A_002, A_004)
+
+# Stage 3: extract
+python3 ${SKILL_DIR}/scripts/extract_sample.py \
+    --zarr .../A_001.zarr \
+    --output .../stvisuome/A_001 \
+    --table-key table_tissue_nucleus \
+    --extract-mode full_ops_level --mpp 0.5 --patch-size 224 --n-sample 3000
+# (repeat for A_002, A_004)
+
+# Stage 4: compile
+python3 ${SKILL_DIR}/scripts/compile_dataset.py \
+    --per-sample-dir .../stvisuome \
+    --output .../stvisuome/compiled \
+    --samples A_001,A_002,A_004 \
+    --bundle-wds
+```
+
+---
+
 # Cell Patch Dataset: Single-Sample to Multi-Sample Pipeline
 
 ## Three-Phase Architecture
@@ -86,11 +207,8 @@ python3 "${SKILL_DIR}/scripts/extract_sample.py" \
     [--n-sample 10000]         # default: all valid cells
     [--patch-size 224] [--mpp 0.5] [--shard-size 500] [--seed 42]
     [--image-key he_image] [--shapes-key cell_circles] [--table-key table] \
-    # Filtering policy (see "Filtering policy" below):
-    [--biological-filter-policy auto|none|stvisuome_canonical|stvisuome_nucleus_boundary] \
     [--patch-filter-policy auto|strict_no_padding|stvisuome_minimal|strict_with_padding] \
-    [--cell-id-column cell_id] [--nucleus-boundaries-key nucleus_boundaries] \
-    [--filtered-table-key filtered_table] [--filter-report-name filter_report.json]
+    [--cell-id-column cell_id] [--filter-report-name filter_report.json]
 ```
 
 ### Output
@@ -123,58 +241,40 @@ python3 "${SKILL_DIR}/scripts/extract_sample.py" \
 | `source_table_key` | str | table key that produced this cell (e.g. `filtered_table`) |
 | `source_shape_key` | str | shape key that produced this cell (e.g. `cell_circles`) |
 
-### Filtering policy
+### Filtering (patch validity only)
 
-> Full reference: [`references/filtering.md`](references/filtering.md).
+`extract_sample.py` loads `--table-key` directly from the zarr. Run filter
+stage scripts first to produce the appropriate table key (see Stage-Based
+Workflow above).
 
-Two **independent** layers run before any shard is written. Always distinguish them when explaining behavior to the user:
-
-1. **Biological / canonical cell filtering** (`--biological-filter-policy`) — picks which table + shape layer is authoritative and which rows enter the pipeline.
-2. **Patch-validity filtering** (`--patch-filter-policy`) — decides which selected cells produce a tile that can be written safely.
-
-**Always prefer already-canonical stVisuome outputs when present.** If the zarr was produced by `stvisuome-daas preprocess`, it carries `filtered_table`, `filtered_nucleus_boundaries`, `filtered_cell_boundaries`, nucleus/cell centroid-pixel `obsm` fields, and `cell_tiles_{tile_size}`. Use those rather than the raw `table`/`cell_circles` whenever you can.
-
-**Never run upstream preprocessing inside daas-compiler.** No tissue segmentation, no Cellpose, no nucleus matching, no `log1p`, no zarr write-back. If those steps are missing, ask the user to run `stvisuome-daas preprocess` first.
-
-#### Layer 1 — biological policies
-
-| Policy | Behavior |
-|---|---|
-| `auto` (default) | If `filtered_table` is present **and** `--table-key` is at its default → use `filtered_table` (i.e. `stvisuome_canonical`). Otherwise → `none` (warns if `filtered_table` exists but the user named a different table). |
-| `stvisuome_canonical` | Require `filtered_table` to exist; consume it as authoritative. Shapes still come from `--shapes-key`; alignment is by `cell_id`. |
-| `stvisuome_nucleus_boundary` | Keep only table rows whose `obs[cell_id]` appears in `sdata.shapes[nucleus_boundaries].index`. Fails if no overlap. |
-| `none` | Use `--table-key` / `--shapes-key` unchanged; warn that no biological filtering was applied. |
-
-Alignment after Layer 1 uses `resolve_table_shape_alignment`: exact row-order match preferred; otherwise intersection by `cell_id` preserving table row order. Empty intersection is a hard error.
-
-#### Layer 2 — patch policies
+#### Patch-validity filtering (Layer 2)
 
 | Policy | Drops | Allowed extract modes |
 |---|---|---|
 | `auto` (default) | Resolves to `strict_no_padding`. | All. |
-| `strict_no_padding` | `full_oob` ∪ `need_pad`. **Required for `full_scale0` / `full_ops_level`** unless explicit padding is implemented — those modes silently clip boundary-crossing tiles. | All. |
-| `stvisuome_minimal` | `full_oob` only; keeps `need_pad` (boundary-crossing tiles). Use when the user wants stVisuome-like boundary behavior. | **`tile_images` only** — wsidata handles partial reads; rejected for `full_*` modes. |
-| `strict_with_padding` | Reserved. Raises `NotImplementedError` until explicit padding is implemented and tested. | — |
+| `strict_no_padding` | `full_oob` ∪ `need_pad`. **Required for `full_scale0` / `full_ops_level`** — those modes silently clip boundary-crossing tiles. | All. |
+| `stvisuome_minimal` | `full_oob` only; keeps `need_pad` (boundary-crossing tiles). | **`tile_images` only** |
+| `strict_with_padding` | Reserved. Raises. | — |
 
-Positive-centroid filtering (`cx_px > 0 & cy_px > 0`) runs before the patch mask under every policy. **Do not confuse positive centroid with full patch containment** — a positive centroid is necessary but not sufficient for `strict_no_padding`.
+Positive-centroid filtering (`cx_px > 0 & cy_px > 0`) runs before the patch mask under every policy.
 
-#### filter_report.json (always written, always summarized)
+#### filter_report.json
 
-Written to `{output}/filter_report.json` **before any shard**. Summarize its contents in the user-facing reply after every extraction:
+Written to `{output}/filter_report.json` **before any shard**. Key fields:
 
-- `source_table_key`, `source_shape_key` (resolved keys actually consumed; canonical mode prefers `filtered_cell_circles` → `filtered_cell_boundaries` → `cell_circles` when `--shapes-key` is at default)
-- `biological_policy_requested` / `_applied`, `patch_policy_requested` / `_applied`
-- `image_width_px`, `image_height_px` (level-0 H&E dimensions)
-- Sequential counters: `n_cells_source → n_after_biological_filter → n_after_shape_alignment → n_after_positive_centroid → n_after_patch_policy → n_out`. `n_after_biological_filter` is the Layer-1 row mask only; `n_after_shape_alignment` reflects the post-intersection count.
-- `drop_counts_by_reason` keyed on `missing_nucleus_boundary`, `unaligned_with_shapes`, `non_positive_centroid`, `full_oob`, `need_pad`, `requested_subsample`
-- `warnings` — emit them verbatim in the reply
+- `source_table_key`, `source_shape_key` — the keys actually consumed
+- `patch_policy_requested` / `_applied`
+- `image_width_px`, `image_height_px` — level-0 H&E dimensions
+- Sequential counters: `n_cells_source → n_after_shape_alignment → n_after_positive_centroid → n_after_patch_policy → n_out`
+- `drop_counts_by_reason` keyed on `unaligned_with_shapes`, `non_positive_centroid`, `full_oob`, `need_pad`, `requested_subsample`
+- `warnings` — emit them verbatim in reply
 
 #### Row-alignment invariants (must hold every run)
 
-- Within a sample: `manifest.parquet` row `i` ≡ `expression.h5ad` row `i`, `expr_row == sample_index`, `manifest.cell_id == adata_out.obs.cell_id`, `gene_row_index` resolves to the cell of the **resolved** table.
+- Within a sample: `manifest.parquet` row `i` ≡ `expression.h5ad` row `i`, `expr_row == sample_index`, `manifest.cell_id == adata_out.obs.cell_id`, `gene_row_index` resolves to the cell of the aligned table.
 - After Phase 2 compile: `compiled/manifest.parquet[i] == compiled/expression.h5ad[i] == global_idx=i`.
 
-These checks are asserted in `_validate(...)`. If you change the filter pipeline, re-run the unit + integration tests under `tests/test_filtering*.py` before declaring success.
+These checks are asserted in `_validate(...)`. If you change the filter pipeline, re-run the tests under `tests/test_filtering*.py` before declaring success.
 
 ### Pipeline Internals
 
@@ -412,6 +512,7 @@ with ProcessPoolExecutor(max_workers=args.workers) as pool:
 python3 "${SKILL_DIR}/scripts/compile_dataset.py" \
     --per-sample-dir /data/out \
     --output         /data/compiled \
+    [--samples A_001,A_002,A_004]   # default: all subdirs with manifest + h5ad
     [--bundle-wds] [--shard-size 500]
 ```
 
@@ -689,11 +790,20 @@ ax.plot([cx, cx], [cy-arm, cy+arm], color="red", lw=0.8)
 
 | Script | Purpose |
 |--------|---------|
-| `${SKILL_DIR}/scripts/extract_sample.py` | Single-sample extraction (argparse), includes pre-flight boundary viz |
-| `${SKILL_DIR}/scripts/extract_all.py` | Parallel multi-sample batch extraction |
-| `${SKILL_DIR}/scripts/compile_dataset.py` | Compile per-sample dirs → global dataset |
-| `${SKILL_DIR}/scripts/viz_sample.py` | Visualization validation for one sample |
-| `${SKILL_DIR}/daas/dataset.py` | `LRUMmapCache` + `CellPatchDataset` |
+| `${SKILL_DIR}/scripts/inspect_spatialdata.py` | Print zarr tables/shapes/images |
+| `${SKILL_DIR}/scripts/filter_tissue.py` | Tissue-inside filter (SOPA if needed) |
+| `${SKILL_DIR}/scripts/filter_nucleus_presence.py` | Keep cells with nucleus boundary |
+| `${SKILL_DIR}/scripts/filter_nucleus_overlap.py` | Xenium-vs-HE nucleus IoU filter |
+| `${SKILL_DIR}/scripts/extract_sample.py` | Single-sample HE patch extraction |
+| `${SKILL_DIR}/scripts/extract_all.py` | Parallel multi-sample extraction |
+| `${SKILL_DIR}/scripts/compile_dataset.py` | Compile per-sample dirs; --samples flag |
+| `${SKILL_DIR}/scripts/viz_sample.py` | Re-render viz outputs |
+| `${SKILL_DIR}/daas/dataset.py` | LRUMmapCache + CellPatchDataset |
+| `${SKILL_DIR}/daas/planning.py` | NL → StagePlan → render_cli |
+| `${SKILL_DIR}/daas/reports.py` | StageReport + write_stage_report |
+| `${SKILL_DIR}/daas/filters/nucleus_presence.py` | nucleus_presence filter logic |
+| `${SKILL_DIR}/daas/filters/tissue.py` | tissue_inside filter logic |
+| `${SKILL_DIR}/daas/filters/nucleus_overlap.py` | xenium_he_nucleus_overlap logic |
 
 ---
 
