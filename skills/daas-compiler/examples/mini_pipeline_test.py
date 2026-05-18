@@ -28,7 +28,7 @@ from wsidata import TileSpec, open_wsi
 from wsidata.io import add_tiles
 
 # ── Config ───────────────────────────────────────────────────────────────────
-INPUT_PATH = Path("/home/zouqi/datasets/mash/spatialdata/A_001.zarr")
+INPUT_PATH = Path("/path/to/your_sample.zarr")  # adapt to your data
 IMAGE_KEY = "he_image"
 SHAPES_KEY = "cell_circles"
 PATCH_SIZE = 224
