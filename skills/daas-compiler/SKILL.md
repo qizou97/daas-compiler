@@ -59,10 +59,15 @@ per-sample/
 compiled/
   manifest.parquet        global_idx → image location + expr location
   expression.h5ad         gene intersection across all samples
+  wds/                    [optional: --bundle-wds] self-contained WebDataset
+    shard-NNNNNN.tar      jpg + sparse expr.npz + json per cell
+    manifest.parquet      cell_id, sample_id, shard_path, global_idx
+    gene_panel.json       gene names matching .expr.npz indices
         │
         │  [Phase 3: train]
         ▼
-CellPatchDataset(manifest, h5ad, sample_ids=[...])
+CellPatchDataset(manifest, h5ad, sample_ids=[...])           # mmap path
+BundledCellPatchDataset(wds_dir, sample_ids=[...])           # no-mmap path
 ```
 
 **Key invariant:** `compiled/manifest.parquet` row `i` == `compiled/expression.h5ad` row `i` == `global_idx=i`. Both are produced by the same `sorted()` traversal in compile.
@@ -345,10 +350,13 @@ with ProcessPoolExecutor(max_workers=args.workers) as pool:
 ```bash
 python3 "${SKILL_DIR}/scripts/compile_dataset.py" \
     --per-sample-dir /data/out \
-    --output         /data/compiled
+    --output         /data/compiled \
+    [--bundle-wds] [--shard-size 500]
 ```
 
 Scans all subdirs of `--per-sample-dir` that have **both** `manifest.parquet` and `expression.h5ad`. Skips others (e.g. smoke test dirs).
+
+**`--bundle-wds`** also writes a self-contained WebDataset under `{output}/wds/` where each cell is packaged as `{key}.jpg` + `{key}.expr.npz` (sparse: indices int32 + values float32) + `{key}.json` in one tar entry. Training from `wds/` does not require mmap or the compiled h5ad. The gene panel (column order for indices) is in `wds/gene_panel.json`. The bundled manifest has no `tar_offset`/`jpg_size` fields — it's only used for sample-id filtering and shard discovery.
 
 ### Implementation
 
@@ -430,6 +438,35 @@ batch["expression"]         # expression foundation model
 ds = CellPatchDataset(manifest, h5ad, sample_ids=train, transform=val_tf)
 batch["image"], batch["expression"]   # multimodal HE → cell states
 ```
+
+### BundledCellPatchDataset (no mmap, no h5ad)
+
+When `--bundle-wds` is set on compile, every cell's image + sparse expression is co-located in one tar entry. The training-time API mirrors `CellPatchDataset` but reads via `tarfile` (no mmap, no h5ad):
+
+```python
+from daas.dataset import BundledCellPatchDataset
+
+ds = BundledCellPatchDataset(
+    wds_dir         = "compiled/wds",
+    sample_ids      = train_samples,    # None = all samples
+    transform       = T.Compose([T.ToTensor()]),
+    dense_expression = True,            # False → (indices, values, n_genes)
+)
+loader = DataLoader(ds, batch_size=256, shuffle=True, num_workers=8)
+batch  = next(iter(loader))
+# batch["image"].shape      → (256, 3, 224, 224)
+# batch["expression"].shape → (256, n_genes)  (dense_expression=True)
+```
+
+| | `CellPatchDataset` (mmap) | `BundledCellPatchDataset` |
+|---|---|---|
+| Image source | mmap on shard tar + offset | `tarfile.extractfile` on bundled tar |
+| Expression source | compiled `expression.h5ad` indexed by `global_idx` | `{key}.expr.npz` inside the same tar entry |
+| Speed (per-cell read) | very fast (zero-copy mmap) | slightly slower (~2×) but no mmap RAM growth |
+| Total memory at scale | mmap pages may grow per worker | bounded; OS page cache only |
+| Files needed at training time | manifest.parquet + expression.h5ad + per-sample shards | `wds/` only — fully self-contained |
+
+Pick `BundledCellPatchDataset` when training infra disallows large mmap working sets, or when shipping a single tarballed dataset to a different machine.
 
 ### LRU mmap cache
 

@@ -3,14 +3,21 @@ Compile per-sample directories into a unified training dataset.
 Usage:
   python3 scripts/compile_dataset.py \
       --per-sample-dir /data/out \
-      --output         /data/compiled
+      --output         /data/compiled \
+      [--bundle-wds] [--shard-size 500]
+
+When --bundle-wds is set, also writes a self-contained WebDataset under
+{output}/wds/ where each tar entry contains JPEG + sparse expression
+(.expr.npz) + JSON metadata for one cell. Training from the bundled
+output does not require mmap or the compiled h5ad.
 """
-import argparse, time
+import argparse, io, json, tarfile, time
 from pathlib import Path
 
 import anndata
 import numpy as np
 import pandas as pd
+from scipy.sparse import issparse
 
 
 def parse_args():
@@ -19,7 +26,119 @@ def parse_args():
                    help="目录，每个子目录为一个样本")
     p.add_argument("--output", required=True,
                    help="compiled 输出目录")
+    p.add_argument("--bundle-wds", action="store_true",
+                   help="Also write {output}/wds/ — each cell bundled as "
+                        "jpg + sparse expr.npz + json in a tar shard. No mmap "
+                        "needed at training time.")
+    p.add_argument("--shard-size", type=int, default=500,
+                   help="Cells per bundled WDS tar shard (default: 500)")
     return p.parse_args()
+
+
+def _flush_bundled_shard(shard_buf, shard_no, wds_dir):
+    """Write one bundled tar shard with .jpg + .expr.npz + .json per cell."""
+    tar_path = wds_dir / f"shard-{shard_no:06d}.tar"
+    with tarfile.open(tar_path, "w") as tf:
+        for key, jpg, npz, jsn in shard_buf:
+            for ext, data in [(".jpg", jpg), (".expr.npz", npz), (".json", jsn)]:
+                ti = tarfile.TarInfo(name=f"{key}{ext}")
+                ti.size = len(data)
+                tf.addfile(ti, io.BytesIO(data))
+    return tar_path
+
+
+def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_size):
+    """Write self-contained {compiled}/wds/ — image + sparse expr per cell."""
+    wds_dir = compiled / "wds"
+    wds_dir.mkdir(exist_ok=True)
+
+    # Gene panel — column order matches indices in .expr.npz files
+    gene_list = list(common_genes)
+    (wds_dir / "gene_panel.json").write_text(json.dumps(gene_list))
+    n_genes = len(gene_list)
+
+    X = combined.X
+    n_cells = len(global_manifest)
+
+    # Per-shard re-open cache: cells from the same source per-sample shard
+    # are contiguous in global_manifest (concat order), so a single cached
+    # tarfile handle covers each source shard with one open+getmembers pass.
+    cur_path = None
+    cur_tar = None
+    cur_members = None
+
+    bundled_rows = []
+    shard_buf = []
+    shard_no = 0
+    t0 = time.time()
+
+    for global_idx in range(n_cells):
+        row = global_manifest.iloc[global_idx]
+        src_path = row["shard_path"]
+        if src_path != cur_path:
+            if cur_tar is not None:
+                cur_tar.close()
+            cur_tar = tarfile.open(src_path, "r")
+            cur_members = {m.name: m for m in cur_tar.getmembers()}
+            cur_path = src_path
+
+        # Read JPEG from per-sample shard
+        jpg_member = cur_members[f"{row['sample_key']}.jpg"]
+        jpg = cur_tar.extractfile(jpg_member).read()
+
+        # Build sparse expression as indices + values
+        x_row = X[global_idx]
+        if issparse(x_row):
+            indices = x_row.indices.astype(np.int32)
+            values = x_row.data.astype(np.float32)
+        else:
+            dense = np.asarray(x_row).reshape(-1)
+            nz = np.nonzero(dense)[0]
+            indices = nz.astype(np.int32)
+            values = dense[nz].astype(np.float32)
+        npz_buf = io.BytesIO()
+        np.savez(npz_buf, indices=indices, values=values)
+
+        global_key = f"{global_idx:09d}"
+        meta = {
+            "global_idx": int(global_idx),
+            "sample_id":  str(row["sample_id"]),
+            "cell_id":    str(row["cell_id"]),
+            "sample_key": str(row["sample_key"]),
+            "n_genes":    n_genes,
+            "n_nonzero":  int(len(indices)),
+        }
+        shard_buf.append((global_key, jpg, npz_buf.getvalue(),
+                          json.dumps(meta).encode()))
+
+        bundled_rows.append({
+            "global_idx":  int(global_idx),
+            "sample_id":   str(row["sample_id"]),
+            "cell_id":     str(row["cell_id"]),
+            "sample_key":  str(row["sample_key"]),
+            "global_key":  global_key,
+            "shard_path":  str(wds_dir / f"shard-{shard_no:06d}.tar"),
+        })
+
+        if len(shard_buf) == shard_size:
+            _flush_bundled_shard(shard_buf, shard_no, wds_dir)
+            shard_buf = []
+            shard_no += 1
+
+        if (global_idx + 1) % 5000 == 0:
+            rate = (global_idx + 1) / (time.time() - t0)
+            print(f"      {global_idx+1}/{n_cells}  {rate:.0f} cells/s")
+
+    if shard_buf:
+        _flush_bundled_shard(shard_buf, shard_no, wds_dir)
+        shard_no += 1
+
+    if cur_tar is not None:
+        cur_tar.close()
+
+    bundled_manifest = pd.DataFrame(bundled_rows)
+    bundled_manifest.to_parquet(wds_dir / "manifest.parquet", index=False)
+    return wds_dir, shard_no, n_genes
 
 
 def main():
@@ -37,7 +156,7 @@ def main():
     print(f"[compile] Found {len(sample_dirs)} samples: "
           f"{[d.name for d in sample_dirs]}")
 
-    # ── 2a: Merge manifests ───────────────────────────────────────────────────
+    # ── 1: Merge manifests ────────────────────────────────────────────────────
     print("[1/3] Merging manifests …")
     parts = [pd.read_parquet(d / "manifest.parquet") for d in sample_dirs]
     global_manifest = pd.concat(parts, ignore_index=True)
@@ -46,7 +165,7 @@ def main():
     global_manifest.to_parquet(compiled / "manifest.parquet", index=False)
     print(f"      {len(global_manifest)} cells total")
 
-    # ── 2b: Merge h5ad with gene intersection ─────────────────────────────────
+    # ── 2: Merge h5ad with gene intersection ──────────────────────────────────
     print("[2/3] Merging expression h5ad …")
     adatas = [anndata.read_h5ad(d / "expression.h5ad") for d in sample_dirs]
 
@@ -65,7 +184,6 @@ def main():
     )
     combined.obs_names_make_unique()
 
-    # Verify row count matches manifest
     assert combined.n_obs == len(global_manifest), (
         f"h5ad rows ({combined.n_obs}) != manifest rows ({len(global_manifest)})"
     )
@@ -75,10 +193,30 @@ def main():
 
     elapsed = time.time() - t0
     n_shards = sum(1 for d in sample_dirs for _ in d.glob("shard-*.tar"))
+
+    # ── Optional: bundled WebDataset ──────────────────────────────────────────
+    wds_info = ""
+    if args.bundle_wds:
+        print("[bundle] Writing self-contained WebDataset …")
+        wds_dir, n_bundled_shards, n_genes_bundle = _write_bundled_wds(
+            compiled, global_manifest, combined, common_genes, args.shard_size)
+        print(f"      → {wds_dir} ({n_bundled_shards} shards, "
+              f"{len(global_manifest)} cells × {n_genes_bundle} genes)")
+        wds_info = f"""
+
+  [bundled WDS] → {wds_dir}
+  No mmap needed at training time. Each tar entry contains
+  {{key}}.jpg + {{key}}.expr.npz + {{key}}.json. Genes list in
+  {wds_dir}/gene_panel.json (n_genes={n_genes_bundle}).
+
+  from daas.dataset import BundledCellPatchDataset
+  ds = BundledCellPatchDataset(wds_dir="{wds_dir}",
+                                sample_ids=train_samples)"""
+
     print(f"""
 {'='*60}
   COMPILE COMPLETE — {len(sample_dirs)} samples, {len(global_manifest)} cells,
-                     {len(common_genes)} genes, {n_shards} shards
+                     {len(common_genes)} genes, {n_shards} source shards
 {'─'*60}
 from daas.dataset import CellPatchDataset
 from torch.utils.data import DataLoader
@@ -93,9 +231,9 @@ ds = CellPatchDataset(
 loader = DataLoader(ds, batch_size=256, shuffle=True, num_workers=8)
 batch  = next(iter(loader))
 # batch["image"].shape      → (256, 3, 224, 224)
-# batch["expression"].shape → (256, {len(common_genes)})
+# batch["expression"].shape → (256, {len(common_genes)}){wds_info}
 {'='*60}
-  Total time: {elapsed:.1f}s
+  Total time: {time.time() - t0:.1f}s
 """)
 
 

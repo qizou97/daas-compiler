@@ -1,3 +1,3 @@
-from daas.dataset import CellPatchDataset
+from daas.dataset import BundledCellPatchDataset, CellPatchDataset
 
-__all__ = ["CellPatchDataset"]
+__all__ = ["CellPatchDataset", "BundledCellPatchDataset"]
