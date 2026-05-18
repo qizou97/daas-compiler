@@ -3,19 +3,20 @@
 Keeps cells whose Xenium nucleus_boundaries polygon overlaps the nearest
 HE nucleus polygon with intersection-over-union >= overlap_threshold.
 
-If he_nucleus_boundaries does not exist in sdata.shapes, calls
-sopa.segmentation.cellpose on the HE image to create it.
+Requires sopa to be installed. Always runs sopa.segmentation.cellpose
+to produce HE nucleus boundaries — no conditional skip.
 """
 from __future__ import annotations
 
 import numpy as np
 
 
-def _ensure_he_nucleus_shapes(
-    sdata, image_key: str, he_nucleus_key: str
-) -> str:
-    if he_nucleus_key in sdata.shapes:
-        return he_nucleus_key
+def run_he_nucleus_segmentation(sdata, image_key: str) -> str:
+    """Always run SOPA Cellpose HE nucleus segmentation and return the created key.
+
+    Diffs sdata.shapes before/after to discover the new key — never hardcodes
+    a key name. Raises RuntimeError if Cellpose creates no new shape key.
+    """
     try:
         import sopa.segmentation
     except ImportError:
@@ -23,20 +24,24 @@ def _ensure_he_nucleus_shapes(
             "sopa is required for HE nucleus segmentation. "
             "Install with: pip install sopa"
         )
-    print(f"  [nucleus_overlap] {he_nucleus_key!r} not found — "
-          "running sopa Cellpose HE nucleus segmentation …")
+    shapes_before = set(sdata.shapes.keys())
     sopa.segmentation.cellpose(sdata, image_key=image_key)
-    if he_nucleus_key not in sdata.shapes:
+    new_keys = set(sdata.shapes.keys()) - shapes_before
+    if not new_keys:
         raise RuntimeError(
-            f"sopa.segmentation.cellpose ran but {he_nucleus_key!r} was not created. "
-            f"Available shapes: {list(sdata.shapes.keys())}. "
-            "Pass --he-nucleus-key with the correct key."
+            f"sopa.segmentation.cellpose ran but created no new shape key. "
+            f"Shapes before: {sorted(shapes_before)}. "
+            f"Shapes after: {sorted(sdata.shapes.keys())}."
         )
-    return he_nucleus_key
+    if len(new_keys) == 1:
+        return new_keys.pop()
+    for candidate in ("he_nucleus_boundaries", "nucleus_boundaries"):
+        if candidate in new_keys:
+            return candidate
+    return sorted(new_keys)[0]
 
 
 def _iou(poly_a, poly_b) -> float:
-    """Intersection-over-union for two shapely geometries."""
     inter = poly_a.intersection(poly_b).area
     if inter == 0:
         return 0.0
@@ -66,7 +71,6 @@ def filter_by_nucleus_overlap(
     tree = STRtree(he_geoms)
 
     keep_mask = np.zeros(len(cell_ids), dtype=bool)
-    scores = np.zeros(len(cell_ids), dtype=float)
 
     for i, cid in enumerate(cell_ids):
         if cid not in xen_map:
@@ -76,7 +80,6 @@ def filter_by_nucleus_overlap(
         if len(candidates) == 0:
             continue
         best_iou = max(_iou(xen_poly, he_geoms[j]) for j in candidates)
-        scores[i] = best_iou
         if best_iou >= overlap_threshold:
             keep_mask[i] = True
 
@@ -93,6 +96,6 @@ def filter_by_nucleus_overlap(
 
 
 __all__ = [
+    "run_he_nucleus_segmentation",
     "filter_by_nucleus_overlap",
-    "_ensure_he_nucleus_shapes",
 ]
