@@ -1,0 +1,7 @@
+# Runtime extras for the extraction pipeline. The lightweight `daas` package
+# (training-side) is installed via `pip install -e .`. Heavyweight WSI deps
+# below are only needed when running extract/viz scripts.
+spatialdata>=0.7
+wsidata>=0.9
+lazyslide>=0.10
+matplotlib>=3.8

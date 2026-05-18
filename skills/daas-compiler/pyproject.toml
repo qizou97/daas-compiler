@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "daas-compiler"
+version = "0.1.0"
+description = "Cell-centered HE patch dataset compiler"
+readme = "../../README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "qizou97" }]
+dependencies = [
+  "anndata>=0.10",
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "scipy>=1.12",
+  "Pillow>=10",
+  "pyarrow>=15",
+]
+
+[project.optional-dependencies]
+extract = [
+  "spatialdata>=0.7",
+  "wsidata>=0.9",
+  "lazyslide>=0.10",
+  "matplotlib>=3.8",
+]
+test = [
+  "pytest>=7",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["daas*"]
+exclude = ["tests*", "scripts*", "examples*"]
