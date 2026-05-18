@@ -28,7 +28,6 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--zarr",                  required=True)
     p.add_argument("--input-table-key",       default="table")
-    p.add_argument("--input-shape-key",       default="cell_circles")
     p.add_argument("--output-table-key",      default=None,
                    help="Default: {input_table_key}_he")
     p.add_argument("--xenium-nucleus-key",    default="nucleus_boundaries")
