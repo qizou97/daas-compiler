@@ -60,7 +60,8 @@ compiled/
   manifest.parquet        global_idx → image location + expr location
   expression.h5ad         gene intersection across all samples
   wds/                    [optional: --bundle-wds] self-contained WebDataset
-    shard-NNNNNN.tar      jpg + sparse expr.npz + json per cell
+    {sample_id}/
+      shard-NNNNNN.tar    jpg + expr.npz + json per cell (one sample only)
     manifest.parquet      cell_id, sample_id, shard_path, global_idx
     gene_panel.json       gene names matching .expr.npz indices
         │
@@ -356,7 +357,7 @@ python3 "${SKILL_DIR}/scripts/compile_dataset.py" \
 
 Scans all subdirs of `--per-sample-dir` that have **both** `manifest.parquet` and `expression.h5ad`. Skips others (e.g. smoke test dirs).
 
-**`--bundle-wds`** also writes a self-contained WebDataset under `{output}/wds/` where each cell is packaged as `{key}.jpg` + `{key}.expr.npz` (sparse: indices int32 + values float32) + `{key}.json` in one tar entry. Training from `wds/` does not require mmap or the compiled h5ad. The gene panel (column order for indices) is in `wds/gene_panel.json`. The bundled manifest has no `tar_offset`/`jpg_size` fields — it's only used for sample-id filtering and shard discovery.
+**`--bundle-wds`** also writes a self-contained WebDataset under `{output}/wds/` with **per-sample subdirectories**: each `{sample_id}/shard-NNNNNN.tar` contains only cells from that sample (jpg + sparse expr.npz + json per cell). Shards never mix samples. Training from `wds/` does not require mmap or the compiled h5ad. The gene panel is in `wds/gene_panel.json`. The bundled manifest has no `tar_offset`/`jpg_size` fields — it's only used for sample-id filtering and shard discovery.
 
 ### Implementation
 
@@ -499,8 +500,11 @@ def decode_expr_npz(data):
     expr[npz["indices"]] = npz["values"]
     return expr
 
+# Shards are in per-sample subdirs: compiled/wds/{sample_id}/shard-NNNNNN.tar
+# Pass the full sorted list — WebDataset accepts a list of paths.
+shards = sorted(Path("compiled/wds").rglob("shard-*.tar"))
 ds = (
-    wds.WebDataset("compiled/wds/shard-{000000..000099}.tar")
+    wds.WebDataset([str(s) for s in shards])
     .decode("pil",
             wds.handle_extension("expr.npz", decode_expr_npz),
             wds.handle_extension("json", lambda d: json.loads(d)))

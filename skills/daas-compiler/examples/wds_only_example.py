@@ -62,13 +62,15 @@ def decode_json(data: bytes) -> dict:
 
 
 # ── 4. Build the pipeline ─────────────────────────────────────────────────────
-# Brace-expansion URL: WebDataset will read shard-000000.tar through the last
-# shard automatically. Adjust the range to match your output.
-shards = sorted(WDS_DIR.glob("shard-*.tar"))
-assert shards, f"No shards found in {WDS_DIR}"
+# Shards live in per-sample subdirs: compiled/wds/{sample_id}/shard-NNNNNN.tar
+# Collect all shards across all sample subdirs (sorted for reproducibility).
+shards = sorted(WDS_DIR.rglob("shard-*.tar"))
+assert shards, f"No shards found under {WDS_DIR}"
 n_shards = len(shards)
-url_pattern = str(WDS_DIR / f"shard-{{000000..{n_shards-1:06d}}}.tar")
-print(f"Pipeline source: {url_pattern}  ({n_shards} shards)")
+# Pass the full list of shard paths directly — WebDataset accepts a list.
+url_pattern = [str(s) for s in shards]
+print(f"Pipeline source: {n_shards} shards across "
+      f"{len({s.parent for s in shards})} sample dirs")
 
 # `.decode("pil")` decodes any .jpg / .jpeg / .png to a PIL.Image.
 # Custom handlers for our two extra file types are registered via tuples
