@@ -79,3 +79,53 @@ def test_compile_gene_intersection(synthetic_sample, tmp_path):
                    check=True)
     adata = anndata.read_h5ad(compiled_dir / "expression.h5ad")
     assert adata.n_vars == 7   # intersection
+
+
+def test_compile_samples_flag_filters_dirs(synthetic_sample, tmp_path):
+    """--samples restricts which sample dirs are compiled."""
+    per_sample = tmp_path / "per_sample_samples_test"
+    per_sample.mkdir()
+
+    for name in ["KEEP_A", "KEEP_B", "SKIP_C"]:
+        d = per_sample / name
+        shutil.copytree(synthetic_sample["dir"], d)
+        mf = pd.read_parquet(d / "manifest.parquet")
+        mf["sample_id"] = name
+        mf.to_parquet(d / "manifest.parquet", index=False)
+        a = anndata.read_h5ad(d / "expression.h5ad")
+        a.obs["sample_id"] = name
+        a.write_h5ad(d / "expression.h5ad")
+
+    compiled = tmp_path / "compiled_samples"
+    result = subprocess.run(
+        [PYTHON, COMPILE,
+         "--per-sample-dir", str(per_sample),
+         "--output", str(compiled),
+         "--samples", "KEEP_A,KEEP_B"],
+        capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+    mf = pd.read_parquet(compiled / "manifest.parquet")
+    assert set(mf["sample_id"].unique()) == {"KEEP_A", "KEEP_B"}
+    assert len(mf) == synthetic_sample["n_cells"] * 2
+
+
+def test_compile_missing_sample_exits_nonzero(synthetic_sample, tmp_path):
+    """--samples with a non-existent name exits with code 1."""
+    per_sample = tmp_path / "per_sample_missing"
+    per_sample.mkdir()
+
+    d = per_sample / "ONLY_ONE"
+    shutil.copytree(synthetic_sample["dir"], d)
+
+    compiled = tmp_path / "compiled_missing"
+    result = subprocess.run(
+        [PYTHON, COMPILE,
+         "--per-sample-dir", str(per_sample),
+         "--output", str(compiled),
+         "--samples", "ONLY_ONE,DOES_NOT_EXIST"],
+        capture_output=True, text=True
+    )
+    assert result.returncode != 0
+    assert "DOES_NOT_EXIST" in result.stdout + result.stderr

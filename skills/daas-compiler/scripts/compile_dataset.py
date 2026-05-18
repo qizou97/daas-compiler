@@ -11,7 +11,7 @@ When --bundle-wds is set, also writes a self-contained WebDataset under
 (.expr.npz) + JSON metadata for one cell. Training from the bundled
 output does not require mmap or the compiled h5ad.
 """
-import argparse, io, json, tarfile, time
+import argparse, io, json, sys, tarfile, time
 from pathlib import Path
 
 import anndata
@@ -32,6 +32,9 @@ def parse_args():
                         "needed at training time.")
     p.add_argument("--shard-size", type=int, default=500,
                    help="Cells per bundled WDS tar shard (default: 500)")
+    p.add_argument("--samples", default=None,
+                   help="Comma-separated list of sample IDs to compile. "
+                        "Default: all subdirs with manifest + h5ad.")
     return p.parse_args()
 
 
@@ -189,6 +192,17 @@ def main():
     assert sample_dirs, f"No valid sample dirs found in {per_sample}"
     print(f"[compile] Found {len(sample_dirs)} samples: "
           f"{[d.name for d in sample_dirs]}")
+
+    if args.samples:
+        requested = [s.strip() for s in args.samples.split(",")]
+        sample_dir_map = {d.name: d for d in sample_dirs}
+        missing = [s for s in requested if s not in sample_dir_map]
+        if missing:
+            print(f"[compile] ERROR: requested samples not found: {missing}")
+            sys.exit(1)
+        sample_dirs = [sample_dir_map[s] for s in requested]
+        print(f"[compile] --samples filter: using {len(sample_dirs)} of "
+              f"{len(sample_dir_map)} available samples")
 
     # ── 1: Merge manifests ────────────────────────────────────────────────────
     print("[1/3] Merging manifests …")
