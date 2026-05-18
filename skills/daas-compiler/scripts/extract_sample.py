@@ -14,16 +14,19 @@ import numpy as np
 import pandas as pd
 import anndata
 import spatialdata as sd
-import matplotlib; matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon as MplPolygon
 from PIL import Image
 from spatialdata.transformations import get_transformation
 from wsidata import open_wsi, TileSpec
 from wsidata.io import add_tiles
-import lazyslide.pl as lpl
-
 from daas.cli_args import parse_extract_sample_args
+from daas.viz import (
+    resolve_tissue_key,
+    resolve_cell_boundaries_key,
+    resolve_nucleus_key,
+    save_tiles_overview,
+    save_patch_grid,
+    save_saved_patch_grid,
+)
 from daas.filtering import (
     PatchPolicy,
     build_filter_report,
@@ -74,84 +77,6 @@ def flush_shard(shard_buf, shard_no, output_dir):
             f.write(struct.pack(IDX_RECORD_FMT, *rec, 0))
     return str(tar_path), records
 
-def _save_patch_grid(images, cell_ids, x0s, y0s, sdata, SCALE_SHAPE,
-                     PATCH_SIZE, BASE_SIZE, sample_id, viz_dir, dpi=300):
-    """Render patch grid with cell+nucleus boundary overlays to viz_patch_grid.png.
-
-    Called pre-extraction so the user can sanity-check tile content before
-    committing to the full shard write."""
-    cell_bounds = sdata.shapes["cell_boundaries"]
-    nucl_bounds = sdata.shapes["nucleus_boundaries"]
-    nucl_ids    = set(nucl_bounds.index)
-    SCALE       = PATCH_SIZE / BASE_SIZE
-
-    def shape_um_to_patch_px(coords_um, x0, y0):
-        arr  = np.array(coords_um)
-        col  = (arr[:, 0] * SCALE_SHAPE - x0) * SCALE
-        row_ = (arr[:, 1] * SCALE_SHAPE - y0) * SCALE
-        return np.column_stack([col, row_])
-
-    n_test  = len(images)
-    n_cols  = int(np.ceil(np.sqrt(n_test)))
-    n_rows  = int(np.ceil(n_test / n_cols))
-    fig, axes = plt.subplots(n_rows, n_cols,
-                             figsize=(n_cols * 2.8, n_rows * 2.8))
-    if n_test == 1:
-        axes = np.array([axes])
-    axes_flat = axes.flat
-
-    for i in range(n_test):
-        ax = axes_flat[i]
-        ax.imshow(images[i])
-
-        cell_id = cell_ids[i]
-        x0, y0  = x0s[i], y0s[i]
-
-        # cell boundary (cyan)
-        try:
-            cb_pts = shape_um_to_patch_px(
-                list(cell_bounds.loc[cell_id, "geometry"].exterior.coords), x0, y0)
-            ax.add_patch(MplPolygon(cb_pts, closed=True,
-                                    edgecolor="cyan", facecolor="none",
-                                    linewidth=0.8, alpha=0.9))
-        except KeyError:
-            pass
-
-        # nucleus boundary (yellow)
-        if cell_id in nucl_ids:
-            try:
-                nb_pts = shape_um_to_patch_px(
-                    list(nucl_bounds.loc[cell_id, "geometry"].exterior.coords), x0, y0)
-                ax.add_patch(MplPolygon(nb_pts, closed=True,
-                                        edgecolor="yellow", facecolor="none",
-                                        linewidth=0.8, alpha=0.9))
-            except KeyError:
-                pass
-
-        # crosshair at patch center (red)
-        cx = cy = PATCH_SIZE / 2
-        arm = PATCH_SIZE * 0.08
-        ax.plot([cx - arm, cx + arm], [cy, cy], color="red", lw=0.8, alpha=0.9)
-        ax.plot([cx, cx], [cy - arm, cy + arm], color="red", lw=0.8, alpha=0.9)
-
-        ax.set_xlim(0, PATCH_SIZE)
-        ax.set_ylim(PATCH_SIZE, 0)
-        ax.set_title(cell_id[:12], fontsize=5)
-        ax.axis("off")
-
-    for j in range(n_test, len(axes_flat)):
-        axes_flat[j].axis("off")
-
-    fig.suptitle(f"{sample_id} — patch grid pre-flight "
-                 f"({n_test} cells, cyan=cell  yellow=nucleus  +=center)",
-                 fontsize=9, y=0.995)
-    plt.tight_layout()
-    out_path = viz_dir / "viz_patch_grid.png"
-    fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    print(f"      Patch grid viz saved → {out_path}")
-
-
 def _iter_full_load(full_img, x0s, y0s, crop_w, out_w, ds_x, ds_y):
     """Yield (out_w, out_w, 3) uint8 tiles from a pre-loaded full image.
 
@@ -170,20 +95,6 @@ def _iter_full_load(full_img, x0s, y0s, crop_w, out_w, ds_x, ds_y):
             tile_hwc = np.array(Image.fromarray(tile_hwc).resize(
                 (out_w, out_w), Image.LANCZOS))
         yield tile_hwc
-
-
-def _save_tiles_overview(output_dir, wsi, dpi=300):
-    """Render lazyslide.pl.tiles overview. Always called, regardless of --skip-viz."""
-    viz_dir = output_dir / "viz"
-    viz_dir.mkdir(exist_ok=True)
-    print(f"  [viz] Global tiles overview (dpi={dpi}) …")
-    lpl.tiles(wsi, tile_key="cell_tiles")
-    fig = plt.gcf()
-    out = viz_dir / "viz_global_tiles.png"
-    fig.savefig(out, dpi=dpi, bbox_inches="tight")
-    plt.close(fig)
-    print(f"        → {out}")
-    return out
 
 
 def main():
@@ -222,6 +133,13 @@ def main():
     gdf   = gdf_full.iloc[align.shape_row_indices].copy()
     n_after_shape_alignment = int(adata.n_obs)
     print(f"      {n_after_shape_alignment} cells, {adata.n_vars} genes — alignment OK")
+
+    # ── Resolve overlay keys (pure Python, no matplotlib) ────────────────────
+    tissue_key  = resolve_tissue_key(sdata, hint=args.tissue_shapes_key)
+    cell_key    = resolve_cell_boundaries_key(sdata, hint=args.cell_boundaries_key)
+    nucleus_key = resolve_nucleus_key(sdata, hint=args.nucleus_boundaries_key)
+    print(f"      overlay keys: tissue={tissue_key!r}  cell={cell_key!r}  "
+          f"nucleus={nucleus_key!r}")
 
     # ── Phase 2: MPP derivation ───────────────────────────────────────────────
     print("[2/9] Deriving SLIDE_MPP …")
@@ -354,16 +272,20 @@ def main():
     viz_dir = output_dir / "viz"
     viz_dir.mkdir(exist_ok=True)
 
-    # Register all cell tile positions on the WSI. This is needed for
-    # lazyslide.pl.tiles to render the overview and for tile_images mode
-    # below; harmless for full_scale0 / full_ops_level which read pixels
-    # directly from sdata.
     add_tiles(wsi, key="cell_tiles",
               xys=np.column_stack([sx0_ord, sy0_ord]),
               tile_spec=spec, tissue_ids=np.zeros(n_out, dtype=int))
 
-    # 6a. Global tiles overview via lazyslide.pl.tiles → viz_global_tiles.png
-    _save_tiles_overview(output_dir, wsi)
+    # 6a. Global tiles overview (+ tissue overlay if key resolved)
+    overview_result = save_tiles_overview(
+        output_dir, wsi, sdata=sdata,
+        tissue_key=tissue_key, scale_shape=SCALE_SHAPE,
+    )
+    print(f"        → {overview_result['viz_global_tiles']}")
+    if overview_result["viz_global_tiles_tissue_overlay"]:
+        print(f"        → {overview_result['viz_global_tiles_tissue_overlay']} (tissue overlay)")
+    for w in overview_result["warnings"]:
+        print(f"        [warn] {w}")
 
     # 6b. Patch grid: 25 random in-memory test patches with boundary overlays
     n_grid   = min(25, n_out)
@@ -377,10 +299,26 @@ def main():
         assert tile.image.shape == (PATCH_SIZE, PATCH_SIZE, 3)
         assert tile.image.dtype == np.uint8
         grid_images.append(tile.image)
-    _save_patch_grid(grid_images, [cell_ids_ord[i] for i in grid_idx],
-                     sx0_ord[grid_idx], sy0_ord[grid_idx],
-                     sdata, SCALE_SHAPE, PATCH_SIZE, BASE_SIZE,
-                     sample_id, viz_dir)
+    grid_out = save_patch_grid(
+        grid_images, [cell_ids_ord[i] for i in grid_idx],
+        sx0_ord[grid_idx], sy0_ord[grid_idx],
+        sdata, SCALE_SHAPE, PATCH_SIZE, BASE_SIZE,
+        sample_id, viz_dir,
+        cell_key=cell_key, nucleus_key=nucleus_key,
+    )
+    print(f"        → {grid_out}")
+
+    # 6c. Write viz_report.json
+    viz_report = {
+        "tissue_key": tissue_key,
+        "cell_key": cell_key,
+        "nucleus_key": nucleus_key,
+        "viz_global_tiles": overview_result["viz_global_tiles"],
+        "viz_global_tiles_tissue_overlay": overview_result["viz_global_tiles_tissue_overlay"],
+        "viz_patch_grid": str(grid_out),
+        "warnings": overview_result["warnings"],
+    }
+    (viz_dir / "viz_report.json").write_text(json.dumps(viz_report, indent=2))
 
     # ── Phase 7: Extract + write shards ──────────────────────────────────────
     mode = args.extract_mode
@@ -475,10 +413,36 @@ def main():
     cells_df["expr_row"] = cells_df["sample_index"]   # local row in expression.h5ad
     cells_df.to_parquet(output_dir / "manifest.parquet", index=False)
 
+    # ── Phase 8c: Post-save viz (reads from actual tar shards) ───────────────
+    print("[8c] Post-save patch grid validation …")
+    saved_viz_result = save_saved_patch_grid(
+        manifest_df=cells_df,
+        sdata=sdata,
+        viz_dir=viz_dir,
+        sample_id=sample_id,
+        patch_size=PATCH_SIZE,
+        scale_shape=SCALE_SHAPE,
+        x0_col="bbox_x0",
+        y0_col="bbox_y0",
+        cell_key=cell_key,
+        nucleus_key=nucleus_key,
+        base_size=BASE_SIZE,
+        n_grid=25,
+        seed=args.seed,
+    )
+    print(f"      → {saved_viz_result.get('viz_saved_patch_grid')}")
+    print(f"      n_checked={saved_viz_result['n_checked']}  "
+          f"n_rendered={saved_viz_result['n_rendered']}  "
+          f"missing={saved_viz_result['missing_members']}  "
+          f"bad_size={saved_viz_result['bad_image_size']}")
+
     # ── Phase 9: Validation ───────────────────────────────────────────────────
     print("[9/9] Validation …")
-    _validate(cells_df, adata_out, adata, BASE_HALF, n_out, rng, PATCH_SIZE,
-              cell_id_column=args.cell_id_column)
+    validate_report = _validate(
+        cells_df, adata_out, adata, BASE_HALF, n_out, rng, PATCH_SIZE,
+        cell_id_column=args.cell_id_column,
+        overlay_keys_used=[k for k in [tissue_key, cell_key, nucleus_key] if k],
+    )
 
     total_mb = sum(f.stat().st_size for f in output_dir.glob("*.tar")) / 1e6
     elapsed  = time.time()-t0
@@ -503,15 +467,15 @@ print(adata)  # AnnData ({n_out}, {adata.n_vars})
 """)
 
 def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size,
-              cell_id_column: str = "cell_id"):
+              cell_id_column: str = "cell_id",
+              overlay_keys_used: list | None = None) -> dict:
     import io, tarfile
     from PIL import Image
     if n_out == 0:
         raise ValueError(
             "No cells survived filtering — nothing to validate. "
             "Inspect filter_report.json: drop_counts_by_reason should explain "
-            "where the cells went, and warnings should flag policy "
-            "misconfiguration."
+            "where the cells went."
         )
     assert len(cells_df) == n_out == adata_out.n_obs
     assert cells_df["sample_key"].nunique() == n_out
@@ -533,13 +497,23 @@ def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size,
     assert bbox_err.max() < 1.0
     n_random = min(20, n_out)
     check_idx = rng.choice(n_out, n_random, replace=False)
+    bad_image_size = 0
     for si in check_idx:
         row = cells_df.iloc[int(si)]
         with tarfile.open(row["shard_path"], "r") as tf:
             jpg = tf.extractfile(f"{row['sample_key']}.jpg").read()
         img = Image.open(io.BytesIO(jpg))
-        assert img.size == (patch_size, patch_size)
+        if img.size != (patch_size, patch_size):
+            bad_image_size += 1
+    assert bad_image_size == 0, f"{bad_image_size} JPEGs had wrong size"
     print(f"  [PASS] all validation checks (random JPEG sample size={n_random})")
+    return {
+        "n_checked": n_random,
+        "missing_members": 0,
+        "decode_errors": 0,
+        "bad_image_size": bad_image_size,
+        "overlay_keys_used": overlay_keys_used or [],
+    }
 
 if __name__ == "__main__":
     main()

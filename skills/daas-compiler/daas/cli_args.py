@@ -33,6 +33,15 @@ def build_extract_sample_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed",        type=int, default=42)
     p.add_argument("--image-key",   default="he_image")
     p.add_argument("--shapes-key",  default=DEFAULT_SHAPES_KEY)
+    p.add_argument("--tissue-shapes-key", default="auto",
+                   help="Tissue shape key for overlay viz. 'auto' = probe candidate "
+                        "keys (tissue, tissue_boundaries, …). 'none' = skip overlay.")
+    p.add_argument("--cell-boundaries-key", default="auto",
+                   help="Cell boundary shape key for patch grid overlays. "
+                        "'auto' = probe candidate keys.")
+    p.add_argument("--nucleus-boundaries-key", default="auto",
+                   help="Nucleus boundary shape key for patch grid overlays. "
+                        "'auto' = probe candidate keys. 'none' = skip.")
     p.add_argument("--table-key",   default=DEFAULT_TABLE_KEY)
     p.add_argument("--extract-mode", default="tile_images",
                    choices=["tile_images", "full_scale0", "full_ops_level"],

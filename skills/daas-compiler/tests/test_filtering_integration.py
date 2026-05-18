@@ -154,7 +154,10 @@ def test_cli_parse_no_biological_policy_args():
     flat = [s for group in option_strings for s in group]
     assert "--biological-filter-policy" not in flat
     assert "--filtered-table-key" not in flat
-    assert "--nucleus-boundaries-key" not in flat
+    # viz overlay keys added in v0.6.1
+    assert "--tissue-shapes-key" in flat
+    assert "--cell-boundaries-key" in flat
+    assert "--nucleus-boundaries-key" in flat
 
 
 def test_cli_parse_table_key_respected():
