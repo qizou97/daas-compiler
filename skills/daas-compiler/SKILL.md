@@ -3,6 +3,35 @@ name: daas-compiler
 description: Extract cell-centered HE image patches from SpatialData into an indexed WebDataset for ML model training. Covers single-sample extraction, multi-sample parallel batch extraction, compile-step gene-intersection merge, and CellPatchDataset with LRU mmap loader. Use when building HE patch datasets for predicting gene expression from tissue morphology, or when scaling a single-sample pipeline to 10s–100s of zarr samples.
 ---
 
+## Agent Contract
+
+These rules govern the agent's behavior when executing daas-compiler workflows.
+They cannot be overridden by conversational context.
+
+**Stage plan required.** The agent must produce and present an explicit stage plan
+before executing any multi-step workflow (filtering → extraction → compile → task-ready).
+See `references/agent-contract.md` for required stage plan fields.
+
+**Preserve the training-ready contract.** The agent must not describe outputs as
+"training-ready" unless a task-ready packaging stage has produced splits, loader-ready
+artifacts, and validation reports. See `references/training-ready-contract.md`.
+
+**Distinguish artifact levels.** The agent must use correct level terminology in all
+responses:
+- L2 = patch-compiled (`extract_sample.py` output)
+- L3 = dataset-compiled (`compile_dataset.py` output)
+- L4 = training-ready (task adapter output, task-specific)
+
+**Follow versioning and commit rules.** When modifying the skill (SKILL.md, scripts,
+daas/ package), the agent must follow the commit scopes in `CONTRIBUTING.md` and note
+any schema version bumps required by `VERSIONING.md`.
+
+**No silent behavior changes.** The agent must not silently change default filtering,
+extraction, or task-ready packaging behavior. Any change to defaults must be announced
+to the user and reflected in the stage plan before execution.
+
+---
+
 ## Version Compatibility
 
 Tested with: spatialdata 0.7+, wsidata 0.9+, lazyslide 0.10+, anndata 0.10+, numpy 1.26+, pandas 2.2+, scipy 1.12+
