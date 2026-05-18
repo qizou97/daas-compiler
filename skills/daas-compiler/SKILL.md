@@ -51,7 +51,8 @@ per-sample/
     expression.h5ad       raw counts sparse matrix
     manifest.parquet      per-cell metadata
     viz/
-      viz_preflight_boundary.png   cell+nucleus boundary overlay grid
+      viz_global_tiles.png         lazyslide.pl.tiles overview (dpi=300, pre-shard)
+      viz_patch_grid.png           5×5 random cells with cell+nucleus boundary overlays (dpi=300, pre-shard)
         │
         │  [Phase 2: compile]  run once all samples done, <2 min
         ▼
@@ -496,11 +497,16 @@ def __getitem__(self, idx):
 
 ## Visualization Validation
 
-**Pre-flight boundary viz** runs automatically during `extract_sample.py` before the full extraction (see [Pre-Flight Check + Boundary Viz](#pre-flight-check--boundary-viz-up-to-9-cells)). It saves a grid of up to 9 test patches with cell boundary (cyan), nucleus boundary (yellow), and center crosshair (red) overlays to `{output}/viz/viz_preflight_boundary.png`.
+`extract_sample.py` produces two viz files **before** writing any tile shards, so the user can sanity-check tile content + slide coverage and abort if something looks wrong:
 
-**Post-extraction viz** can be run separately to verify patch quality and spatial alignment.
+- `{output}/viz/viz_global_tiles.png` — `lazyslide.pl.tiles` overview of every registered cell tile on the slide, dpi=300
+- `{output}/viz/viz_patch_grid.png` — 5×5 random cells, each with cell-boundary (cyan), nucleus-boundary (yellow), and center crosshair (red) overlays, dpi=300
 
-### CLI
+These are produced unconditionally — there is no `--skip-viz` flag. Generating them is cheap (~1–2 s for the patch grid; lpl.tiles renders a thumbnail) and the safety they provide is high.
+
+### Optional standalone re-render
+
+`viz_sample.py` lets you re-render the same two outputs after extraction, e.g. if you tweak rendering or want a fresh copy.
 
 ```bash
 python3 "${SKILL_DIR}/scripts/viz_sample.py" \
@@ -508,11 +514,7 @@ python3 "${SKILL_DIR}/scripts/viz_sample.py" \
     --output /data/out/A_002    # reads manifest.parquet from here
 ```
 
-Outputs to `{output}/viz/`:
-- `viz_preflight_boundary.png` — cell+nucleus boundary overlay grid (from extract pre-flight)
-- `viz_global_tiles.png` — all tiles on whole-slide overview via `lazyslide.pl.tiles` at dpi=300; **always produced**, even with `--skip-viz`
-- `viz_centroid_overlay.png` — centroids on thumbnail (skipped with `--skip-viz`)
-- `viz_patch_grid.png` — 5×5 grid with cell (cyan) + nucleus (yellow) boundaries, center crosshair (red) (skipped with `--skip-viz`)
+It writes the same `viz_global_tiles.png` and `viz_patch_grid.png` (reading JPEG content from existing shards for the patch grid).
 
 ### Boundary overlay coordinate transform
 
@@ -571,35 +573,38 @@ ax.plot([cx, cx], [cy-arm, cy+arm], color="red", lw=0.8)
 | mmap cache thrash at large scale | `mmap_cache_size=128` too small for 72 samples | Set `mmap_cache_size ≈ ceil(total_shards / num_workers)` |
 | extract_all worker OOM | Too many workers × zarr in memory | Reduce `--workers`; each worker needs ~4 GB RAM |
 
-## Pre-Flight Check + Boundary Viz (up to 9 cells)
+## Pre-Flight Viz (before any tile shards are written)
 
-Before full-scale processing of a new sample, the pipeline extracts up to 9 test tiles and renders a boundary overlay grid to `{output}/viz/viz_preflight_boundary.png`:
+The pipeline produces `viz_global_tiles.png` + `viz_patch_grid.png` **before** writing any shards. This lets the user verify that:
 
-**Steps:**
-1. Extract test tiles via `add_tiles` + `iter.tile_images`
-2. Assert shape `(PATCH_SIZE, PATCH_SIZE, 3)` and dtype `uint8`
-3. Load `cell_boundaries` and `nucleus_boundaries` from `sdata.shapes`
-4. Overlay cell boundaries (cyan), nucleus boundaries (yellow), and center crosshair (red) on each patch
-5. Save grid to `{output}/viz/viz_preflight_boundary.png`
+1. Tile positions cover the slide as expected (via `lazyslide.pl.tiles`).
+2. Patch crops actually contain cell content with correct cell+nucleus boundary alignment.
+
+If either looks wrong, abort and adjust config (MPP, patch size, shape key) before paying the cost of full extraction.
 
 ```python
-n_test     = min(9, n_out)
-test_xys   = np.column_stack([sx0_ord[:n_test], sy0_ord[:n_test]])
-add_tiles(wsi, key="test_tiles", xys=test_xys, tile_spec=spec,
-          tissue_ids=np.zeros(n_test, dtype=int))
-test_images = []
-for tile in wsi.iter.tile_images("test_tiles"):
-    assert tile.image.shape == (PATCH_SIZE, PATCH_SIZE, 3)
-    assert tile.image.dtype == np.uint8
-    test_images.append(tile.image)
+# Register ALL cell tile positions on the WSI (needed for lpl.tiles + tile_images mode).
+add_tiles(wsi, key="cell_tiles",
+          xys=np.column_stack([sx0_ord, sy0_ord]),
+          tile_spec=spec, tissue_ids=np.zeros(n_out, dtype=int))
 
-# Render boundary overlay grid
+# 1. lazyslide.pl.tiles overview — dpi=300, always produced
 viz_dir = output_dir / "viz"
 viz_dir.mkdir(exist_ok=True)
-_render_boundary_grid(test_images, cell_ids_ord[:n_test],
-                      sx0_ord[:n_test], sy0_ord[:n_test],
-                      sdata, SCALE_SHAPE, PATCH_SIZE, BASE_SIZE,
-                      sample_id, viz_dir)
+lpl.tiles(wsi, tile_key="cell_tiles")
+fig = plt.gcf()
+fig.savefig(viz_dir / "viz_global_tiles.png", dpi=300, bbox_inches="tight")
+plt.close(fig)
+
+# 2. Patch grid: 25 random in-memory test patches + boundary overlays
+n_grid = min(25, n_out)
+rng_grid = np.random.default_rng(seed)
+grid_idx = rng_grid.choice(n_out, n_grid, replace=False)
+add_tiles(wsi, key="patch_grid",
+          xys=np.column_stack([sx0_ord[grid_idx], sy0_ord[grid_idx]]),
+          tile_spec=spec, tissue_ids=np.zeros(n_grid, dtype=int))
+grid_images = [tile.image for tile in wsi.iter.tile_images("patch_grid")]
+# Render overlays + save to viz_patch_grid.png at dpi=300 (see coord transform below)
 ```
 
 ### Boundary overlay coordinate transform

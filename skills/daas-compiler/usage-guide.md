@@ -45,11 +45,11 @@ Tell your AI agent what you want to do:
    - `tile_images` — wsidata iterator, low memory (~50 MB), slow (1×)
    - `full_ops_level` (recommended) — load ops_level into memory, 36× faster, ~0.4 GB
    - `full_scale0` — load scale0 into memory, 9× faster, ~1.6 GB
-7. **Extract patches** using the chosen mode
-8. **Write WebDataset** shards with binary .idx for O(1) random access
-9. **Save aligned h5ad** with expression data in patch sample_index order
-10. **Validate** with 6-point verification suite including random access checks
-11. **Generate visualizations**: tile overview, centroid overlay, example patches
+7. **Pre-flight viz (before any shards are written)** — save `viz_global_tiles.png` (lazyslide.pl.tiles overview) and `viz_patch_grid.png` (25 random cells with cell+nucleus boundary overlays) at dpi=300 to `{output}/viz/`. Sanity check; abort if alignment looks wrong.
+8. **Extract patches** using the chosen mode
+9. **Write WebDataset** shards with binary .idx for O(1) random access
+10. **Save aligned h5ad** with expression data in patch sample_index order
+11. **Validate** with 6-point verification suite including random access checks
 
 ## Tips
 

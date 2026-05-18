@@ -88,30 +88,10 @@ def main():
     plt.close(fig)
     print(f"    Saved {out1}")
 
-    # ── 2. Centroid overlay on thumbnail ─────────────────────────────────────
-    print("[3] Centroid overlay …")
-    try:
-        thumb = wsi.reader.get_thumbnail(size=(2000, 2000))
-    except Exception:
-        thumb = sdata.images[args.image_key]["scale4"]["image"].values.transpose(1, 2, 0)
-
-    th, tw = thumb.shape[:2]
-    cx_t = manifest["center_x_pixel"].values * (tw / IMG_W)
-    cy_t = manifest["center_y_pixel"].values * (th / IMG_H)
     sample_id = manifest["sample_id"].iloc[0]
 
-    fig, ax = plt.subplots(figsize=(12, 16))
-    ax.imshow(thumb)
-    ax.scatter(cx_t, cy_t, s=1.0, c="cyan", alpha=0.6, linewidths=0)
-    ax.set_title(f"{sample_id} — {len(manifest)} sampled centroids", fontsize=11)
-    ax.axis("off")
-    out2 = viz_dir / "viz_centroid_overlay.png"
-    fig.savefig(out2, dpi=100, bbox_inches="tight")
-    plt.close(fig)
-    print(f"    Saved {out2}")
-
-    # ── 3. Patch grid with boundary overlays ──────────────────────────────────
-    print(f"[4] Patch grid ({args.grid_n} patches) …")
+    # ── 2. Patch grid with boundary overlays ──────────────────────────────────
+    print(f"[3] Patch grid ({args.grid_n} patches) …")
     from matplotlib.patches import Polygon as MplPolygon
 
     cell_bounds = sdata.shapes["cell_boundaries"]
@@ -178,7 +158,7 @@ def main():
 
     plt.tight_layout()
     out3 = viz_dir / "viz_patch_grid.png"
-    fig.savefig(out3, dpi=150, bbox_inches="tight")
+    fig.savefig(out3, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"    Saved {out3}")
 
