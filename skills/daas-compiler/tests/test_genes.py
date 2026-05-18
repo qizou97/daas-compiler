@@ -68,6 +68,12 @@ def test_resolve_explicit_no_panel_raises():
         resolve_gene_panel([a], ["S1"], "explicit", explicit_gene_panel=None)
 
 
+def test_resolve_explicit_empty_list_raises():
+    a = _adata(["A", "B"])
+    with pytest.raises(ValueError, match="empty"):
+        resolve_gene_panel([a], ["S1"], "explicit", explicit_gene_panel=[])
+
+
 def test_validate_gene_panel_passes():
     a = _adata(["A", "B"])
     b = _adata(["A", "B"])

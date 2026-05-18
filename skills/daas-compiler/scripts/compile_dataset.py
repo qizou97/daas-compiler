@@ -19,6 +19,8 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import issparse
 
+from daas.genes import resolve_gene_panel, validate_gene_panel, write_gene_panel, gene_panel_sha256
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -233,7 +235,6 @@ def main():
             sys.exit(1)
         explicit_genes = json.loads(Path(args.gene_panel).read_text())
 
-    from daas.genes import resolve_gene_panel, validate_gene_panel, write_gene_panel, gene_panel_sha256
     gene_panel = resolve_gene_panel(adatas, sample_names, args.gene_order,
                                     explicit_gene_panel=explicit_genes)
     n_genes_before = adatas[0].n_vars

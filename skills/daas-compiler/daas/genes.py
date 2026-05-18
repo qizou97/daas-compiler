@@ -44,6 +44,8 @@ def resolve_gene_panel(
     if policy == "explicit":
         if explicit_gene_panel is None:
             raise ValueError("--gene-panel path required when --gene-order=explicit")
+        if not explicit_gene_panel:
+            raise ValueError("--gene-panel list is empty")
         missing = [g for g in explicit_gene_panel if g not in intersection]
         if missing:
             raise ValueError(
