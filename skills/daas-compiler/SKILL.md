@@ -1,8 +1,6 @@
 ---
-name: bio-spatial-transcriptomics-cell-patch-extraction
+name: daas-compiler
 description: Extract cell-centered HE image patches from SpatialData into an indexed WebDataset for ML model training. Covers single-sample extraction, multi-sample parallel batch extraction, compile-step gene-intersection merge, and CellPatchDataset with LRU mmap loader. Use when building HE patch datasets for predicting gene expression from tissue morphology, or when scaling a single-sample pipeline to 10s–100s of zarr samples.
-tool_type: python
-primary_tool: wsidata
 ---
 
 ## Version Compatibility
@@ -18,8 +16,22 @@ Key API surface to verify on version mismatch:
 - `lazyslide.pl.tiles(wsi, tile_key)` — returns None, use `plt.gcf()` after
 - `wsi.reader.get_thumbnail(size)` — requires `size` parameter
 
-Python path: `/home1/zouqi/miniforge3/envs/daas/bin/python3`  
-Do NOT use `conda run -n daas` — use the full python path directly.
+## Installation
+
+This skill ships its own scripts under `${SKILL_DIR}/scripts/` and a small
+`daas` Python package under `${SKILL_DIR}/daas/`. Run once per environment:
+
+```bash
+pip install -e "${SKILL_DIR}"
+pip install -r "${SKILL_DIR}/requirements.txt"
+```
+
+After this, `from daas.dataset import CellPatchDataset` works in user code
+and all CLI scripts can be invoked via their full skill-relative path.
+
+`${SKILL_DIR}` denotes the absolute path of the directory containing this
+SKILL.md file. If imports fail, ask the user which Python interpreter to
+use; never hardcode a path.
 
 ---
 
@@ -61,7 +73,7 @@ CellPatchDataset(manifest, h5ad, sample_ids=[...])
 ### CLI
 
 ```bash
-python3 scripts/extract_sample.py \
+python3 "${SKILL_DIR}/scripts/extract_sample.py" \
     --zarr   /data/A_002.zarr \
     --output /data/out/A_002 \
     [--sample-id A_002]        # default: inferred from zarr dirname
@@ -269,7 +281,7 @@ for row, rec in zip(cells_rows[-len(shard_buf):], recs):
 ### CLI
 
 ```bash
-python3 scripts/extract_all.py \
+python3 "${SKILL_DIR}/scripts/extract_all.py" \
     --zarr-dir /data/spatialdata \
     --output   /data/out \
     --workers  4 \
@@ -324,7 +336,7 @@ with ProcessPoolExecutor(max_workers=args.workers) as pool:
 ### CLI
 
 ```bash
-python3 scripts/compile_dataset.py \
+python3 "${SKILL_DIR}/scripts/compile_dataset.py" \
     --per-sample-dir /data/out \
     --output         /data/compiled
 ```
@@ -485,7 +497,7 @@ def __getitem__(self, idx):
 ### CLI
 
 ```bash
-python3 scripts/viz_sample.py \
+python3 "${SKILL_DIR}/scripts/viz_sample.py" \
     --zarr   /data/A_002.zarr \
     --output /data/out/A_002    # reads manifest.parquet from here
 ```
@@ -528,11 +540,11 @@ ax.plot([cx, cx], [cy-arm, cy+arm], color="red", lw=0.8)
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/extract_sample.py` | Single-sample extraction (argparse), includes pre-flight boundary viz |
-| `scripts/extract_all.py` | Parallel multi-sample batch extraction |
-| `scripts/compile_dataset.py` | Compile per-sample dirs → global dataset |
-| `scripts/viz_sample.py` | Visualization validation for one sample |
-| `daas/dataset.py` | `LRUMmapCache` + `CellPatchDataset` |
+| `${SKILL_DIR}/scripts/extract_sample.py` | Single-sample extraction (argparse), includes pre-flight boundary viz |
+| `${SKILL_DIR}/scripts/extract_all.py` | Parallel multi-sample batch extraction |
+| `${SKILL_DIR}/scripts/compile_dataset.py` | Compile per-sample dirs → global dataset |
+| `${SKILL_DIR}/scripts/viz_sample.py` | Visualization validation for one sample |
+| `${SKILL_DIR}/daas/dataset.py` | `LRUMmapCache` + `CellPatchDataset` |
 
 ---
 
@@ -546,7 +558,7 @@ ax.plot([cx, cx], [cy-arm, cy+arm], color="red", lw=0.8)
 | `'>' not supported between 'tuple' and 'int'` in `get_thumbnail` | SpatialDataImage2DReader API | `except Exception: thumb = sdata.images[k]["scale4"]["image"].values.transpose(1,2,0)` |
 | `AttributeError: 'DataTree' has no attribute 'shape'` | Multiscale image is DataTree | Use `sdata.images[k]["scale0"]["image"].shape` |
 | `BASE_HALF` causes 0.5px offset | Integer division `BASE_SIZE // 2` | Use `BASE_SIZE / 2.0` (float) |
-| `conda run -n daas` cannot find lazyslide | PATH isolation | Use `/path/to/envs/daas/bin/python3` directly |
+| subprocess cannot find lazyslide | Python interpreter mismatch | Use `sys.executable` (or ask user for interpreter path); never use `conda run` |
 | `sample_key` read as int after parquet round-trip | Old CSV workflow; parquet preserves str | Use `manifest["sample_key"].astype(str)` after `read_parquet` for safety |
 | `todense()` AttributeError on dense X | h5ad stored without sparse compression | `row_x.toarray() if issparse(row_x) else np.array(row_x)` |
 | `h5ad rows != manifest rows` during compile | Different sort order for manifest vs h5ad | Both must use the same `sorted(sample_dirs)` list |

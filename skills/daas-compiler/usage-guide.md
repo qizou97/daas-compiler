@@ -61,4 +61,4 @@ Tell your AI agent what you want to do:
 - **Binary .idx** format enables random access without sequential tar scan
 - **Extraction mode** — `--extract-mode full_ops_level` for 36× speedup (loads ~0.4GB); use `tile_images` only when memory < 1GB. See SKILL.md for benchmarks.
 - **h5ad output** contains only valid cells in sample_index order with full alignment metadata
-- **Patches are JPEG quality=92** — balance between file size and image quality for ML training
+- **Patches are JPEG quality=95** — balance between file size and image quality for ML training

@@ -5,7 +5,7 @@ import anndata
 import pandas as pd
 import pytest
 
-PYTHON  = "/home1/zouqi/miniforge3/envs/daas/bin/python3"
+PYTHON  = sys.executable
 COMPILE = str(Path(__file__).parent.parent / "scripts/compile_dataset.py")
 
 
