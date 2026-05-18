@@ -48,11 +48,22 @@ def _flush_bundled_shard(shard_buf, shard_no, wds_dir):
 
 
 def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_size):
-    """Write self-contained {compiled}/wds/ — image + sparse expr per cell."""
+    """Write self-contained {compiled}/wds/ — image + sparse expr per cell.
+
+    Layout: per-sample subdirectories so each shard contains cells from
+    exactly one sample. This mirrors the per-sample dir layout, keeps
+    sample-id filtering free (just pick the matching subdirs), and never
+    requires reading partial shards when a user selects a sample subset.
+
+        {compiled}/wds/
+            {sample_id}/
+                shard-NNNNNN.tar     jpg + expr.npz + json per cell
+            manifest.parquet         global manifest (covers all samples)
+            gene_panel.json          gene names in column order
+    """
     wds_dir = compiled / "wds"
     wds_dir.mkdir(exist_ok=True)
 
-    # Gene panel — column order matches indices in .expr.npz files
     gene_list = list(common_genes)
     (wds_dir / "gene_panel.json").write_text(json.dumps(gene_list))
     n_genes = len(gene_list)
@@ -60,20 +71,45 @@ def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_
     X = combined.X
     n_cells = len(global_manifest)
 
-    # Per-shard re-open cache: cells from the same source per-sample shard
-    # are contiguous in global_manifest (concat order), so a single cached
-    # tarfile handle covers each source shard with one open+getmembers pass.
+    # Per-source-shard re-open cache: cells from the same source per-sample
+    # shard are contiguous in global_manifest, so one open+getmembers pass
+    # per source shard is enough.
     cur_path = None
     cur_tar = None
     cur_members = None
 
+    # Per-sample shard counter: each sample starts at shard-000000.
+    sample_shard_state: dict[str, dict] = {}
     bundled_rows = []
-    shard_buf = []
-    shard_no = 0
+    total_shards = 0
     t0 = time.time()
+
+    def _flush(sample_id):
+        state = sample_shard_state[sample_id]
+        if not state["buf"]:
+            return
+        sub_dir = wds_dir / sample_id
+        sub_dir.mkdir(exist_ok=True)
+        tar_path = _flush_bundled_shard(state["buf"], state["shard_no"], sub_dir)
+        # Back-patch shard_path for the rows that just flushed.
+        for row in state["pending_rows"]:
+            row["shard_path"] = str(tar_path)
+        bundled_rows.extend(state["pending_rows"])
+        state["buf"] = []
+        state["pending_rows"] = []
+        state["shard_no"] += 1
 
     for global_idx in range(n_cells):
         row = global_manifest.iloc[global_idx]
+        sample_id = str(row["sample_id"])
+
+        if sample_id not in sample_shard_state:
+            sample_shard_state[sample_id] = {
+                "shard_no":      0,
+                "buf":           [],
+                "pending_rows":  [],
+            }
+
         src_path = row["shard_path"]
         if src_path != cur_path:
             if cur_tar is not None:
@@ -82,11 +118,9 @@ def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_
             cur_members = {m.name: m for m in cur_tar.getmembers()}
             cur_path = src_path
 
-        # Read JPEG from per-sample shard
         jpg_member = cur_members[f"{row['sample_key']}.jpg"]
         jpg = cur_tar.extractfile(jpg_member).read()
 
-        # Build sparse expression as indices + values
         x_row = X[global_idx]
         if issparse(x_row):
             indices = x_row.indices.astype(np.int32)
@@ -102,43 +136,48 @@ def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_
         global_key = f"{global_idx:09d}"
         meta = {
             "global_idx": int(global_idx),
-            "sample_id":  str(row["sample_id"]),
+            "sample_id":  sample_id,
             "cell_id":    str(row["cell_id"]),
             "sample_key": str(row["sample_key"]),
             "n_genes":    n_genes,
             "n_nonzero":  int(len(indices)),
         }
-        shard_buf.append((global_key, jpg, npz_buf.getvalue(),
-                          json.dumps(meta).encode()))
 
-        bundled_rows.append({
+        state = sample_shard_state[sample_id]
+        state["buf"].append((global_key, jpg, npz_buf.getvalue(),
+                              json.dumps(meta).encode()))
+        state["pending_rows"].append({
             "global_idx":  int(global_idx),
-            "sample_id":   str(row["sample_id"]),
+            "sample_id":   sample_id,
             "cell_id":     str(row["cell_id"]),
             "sample_key":  str(row["sample_key"]),
             "global_key":  global_key,
-            "shard_path":  str(wds_dir / f"shard-{shard_no:06d}.tar"),
+            "shard_path":  None,    # filled in by _flush
         })
 
-        if len(shard_buf) == shard_size:
-            _flush_bundled_shard(shard_buf, shard_no, wds_dir)
-            shard_buf = []
-            shard_no += 1
+        if len(state["buf"]) == shard_size:
+            _flush(sample_id)
+            total_shards += 1
 
         if (global_idx + 1) % 5000 == 0:
             rate = (global_idx + 1) / (time.time() - t0)
             print(f"      {global_idx+1}/{n_cells}  {rate:.0f} cells/s")
 
-    if shard_buf:
-        _flush_bundled_shard(shard_buf, shard_no, wds_dir)
-        shard_no += 1
+    # Flush any trailing partial shards (one per sample).
+    for sample_id in sample_shard_state:
+        if sample_shard_state[sample_id]["buf"]:
+            _flush(sample_id)
+            total_shards += 1
 
     if cur_tar is not None:
         cur_tar.close()
 
     bundled_manifest = pd.DataFrame(bundled_rows)
+    # Preserve global_idx order even if multi-sample interleaving in source
+    # caused per-sample state to flush at different times.
+    bundled_manifest = bundled_manifest.sort_values("global_idx").reset_index(drop=True)
     bundled_manifest.to_parquet(wds_dir / "manifest.parquet", index=False)
-    return wds_dir, shard_no, n_genes
+    return wds_dir, total_shards, n_genes
 
 
 def main():

@@ -52,12 +52,44 @@ def test_bundle_wds_produces_expected_files(synthetic_sample, tmp_path):
     assert (wds / "manifest.parquet").exists()
     assert (wds / "gene_panel.json").exists()
 
-    shards = sorted(wds.glob("shard-*.tar"))
-    assert len(shards) > 0, "Expected at least one bundled shard"
+    # Per-sample subdirs, each with at least one shard
+    sample_dirs = [d for d in wds.iterdir() if d.is_dir()]
+    assert {d.name for d in sample_dirs} == {synthetic_sample["sample_id"],
+                                               "TEST_002"}
+    for sd in sample_dirs:
+        assert sorted(sd.glob("shard-*.tar")), f"No shards in {sd}"
 
     gene_panel = json.loads((wds / "gene_panel.json").read_text())
     assert isinstance(gene_panel, list)
     assert len(gene_panel) == synthetic_sample["n_genes"]
+
+
+def test_bundle_wds_shards_never_mix_samples(synthetic_sample, tmp_path):
+    """Each shard contains cells from exactly one sample_id."""
+    _build_two_sample_dir(tmp_path, synthetic_sample)
+    compiled = tmp_path / "compiled"
+
+    subprocess.run(
+        [sys.executable, COMPILE,
+         "--per-sample-dir", str(tmp_path),
+         "--output",         str(compiled),
+         "--bundle-wds",
+         "--shard-size",     "4"],
+        check=True, capture_output=True, text=True
+    )
+
+    wds = compiled / "wds"
+    for shard in wds.rglob("shard-*.tar"):
+        sample_ids_in_shard = set()
+        with tarfile.open(shard, "r") as tf:
+            for m in tf.getmembers():
+                if m.name.endswith(".json"):
+                    meta = json.loads(tf.extractfile(m).read())
+                    sample_ids_in_shard.add(meta["sample_id"])
+        assert len(sample_ids_in_shard) == 1, (
+            f"{shard} mixes samples: {sample_ids_in_shard}")
+        # Parent directory name must match the single sample_id inside
+        assert shard.parent.name in sample_ids_in_shard
 
 
 def test_bundle_wds_tar_members(synthetic_sample, tmp_path):
@@ -73,7 +105,7 @@ def test_bundle_wds_tar_members(synthetic_sample, tmp_path):
         check=True, capture_output=True, text=True
     )
 
-    shards = sorted((compiled / "wds").glob("shard-*.tar"))
+    shards = sorted((compiled / "wds").rglob("shard-*.tar"))
     assert shards
 
     with tarfile.open(shards[0], "r") as tf:
