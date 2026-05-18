@@ -1,15 +1,14 @@
 """
 Filter a SpatialData table to cells inside tissue regions.
-If no tissue polygon exists, runs SOPA tissue segmentation first.
+Runs SOPA tissue segmentation to determine tissue boundaries.
 
 Usage:
   python3 scripts/filter_tissue.py \
       --zarr /data/A_001.zarr \
       --input-table-key table \
       --output-table-key table_tissue \
-      [--tissue-key tissue_boundaries] \
-      [--input-shape-key cell_circles] \
       [--image-key he_image] \
+      [--input-shape-key cell_circles] \
       [--report-dir /data/reports]
 """
 import argparse
@@ -17,7 +16,7 @@ from pathlib import Path
 
 import spatialdata as sd
 
-from daas.filters.tissue import _ensure_tissue_shapes, filter_by_tissue
+from daas.filters.tissue import run_tissue_segmentation, filter_by_tissue
 from daas.reports import StageReport, write_stage_report
 
 
@@ -28,10 +27,8 @@ def parse_args():
     p.add_argument("--input-shape-key",  default="cell_circles")
     p.add_argument("--output-table-key", default=None,
                    help="Default: {input_table_key}_tissue")
-    p.add_argument("--tissue-key",       default="tissue_boundaries",
-                   help="Shape key for tissue polygons (created by SOPA if absent)")
     p.add_argument("--image-key",        default="he_image",
-                   help="Image key passed to SOPA if tissue segmentation is needed")
+                   help="Image key passed to SOPA tissue segmentation")
     p.add_argument("--cell-id-column",   default="cell_id")
     p.add_argument("--report-dir",       default=None)
     return p.parse_args()
@@ -54,7 +51,9 @@ def main():
             f"Available: {list(sdata.tables.keys())}"
         )
 
-    tissue_key = _ensure_tissue_shapes(sdata, args.image_key, args.tissue_key)
+    print(f"  running SOPA tissue segmentation (image_key={args.image_key!r}) …")
+    tissue_key = run_tissue_segmentation(sdata, image_key=args.image_key)
+    print(f"  tissue shape key: {tissue_key!r}")
 
     adata = sdata.tables[args.input_table_key]
     cell_shapes = sdata.shapes[args.input_shape_key]
@@ -82,7 +81,7 @@ def main():
         input_table_key=args.input_table_key,
         output_table_key=output_key,
         input_shape_key=args.input_shape_key,
-        output_shape_key=args.input_shape_key,
+        output_shape_key=tissue_key,
         n_cells_in=n_in,
         n_cells_out=n_out,
         drop_counts_by_reason=drop_counts,
