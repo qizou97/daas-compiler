@@ -3,25 +3,34 @@ from __future__ import annotations
 import numpy as np
 
 
-def _ensure_tissue_shapes(sdata, image_key: str, tissue_key: str) -> str:
-    """Return tissue_key if present, else run SOPA and return the created key."""
-    if tissue_key in sdata.shapes:
-        return tissue_key
+def run_tissue_segmentation(sdata, image_key: str) -> str:
+    """Always run SOPA tissue segmentation and return the created shape key.
+
+    Diffs sdata.shapes before/after to discover the new key — never hardcodes
+    a key name. Raises RuntimeError if SOPA creates no new shape key.
+    """
     try:
         import sopa.segmentation
     except ImportError:
         raise ImportError(
             "sopa is required for tissue segmentation. Install with: pip install sopa"
         )
-    print(f"  [tissue] {tissue_key!r} not found — running sopa tissue segmentation …")
+    shapes_before = set(sdata.shapes.keys())
     sopa.segmentation.tissue(sdata, image_key=image_key)
-    if tissue_key not in sdata.shapes:
+    new_keys = set(sdata.shapes.keys()) - shapes_before
+    if not new_keys:
         raise RuntimeError(
-            f"sopa.segmentation.tissue ran but {tissue_key!r} was not created. "
-            f"Available shapes: {list(sdata.shapes.keys())}. "
-            "Pass --tissue-key with the correct key name."
+            f"sopa.segmentation.tissue ran but created no new shape key. "
+            f"Shapes before: {sorted(shapes_before)}. "
+            f"Shapes after: {sorted(sdata.shapes.keys())}."
         )
-    return tissue_key
+    if len(new_keys) == 1:
+        return new_keys.pop()
+    # Multiple new keys: prefer known tissue key names, else take sorted first.
+    for candidate in ("region_of_interest", "tissue_boundaries", "tissue"):
+        if candidate in new_keys:
+            return candidate
+    return sorted(new_keys)[0]
 
 
 def filter_by_tissue(
@@ -33,28 +42,22 @@ def filter_by_tissue(
     """Return (keep_mask, drop_counts) keeping cells whose centroid is inside
     any tissue polygon.
 
-    cell_shapes: GeoDataFrame with Point or Polygon geometries (cell centroids)
+    cell_shapes: GeoDataFrame with Point or Polygon geometries
     tissue_shapes: GeoDataFrame with Polygon geometries (tissue regions)
     """
     import geopandas as gpd
 
     cell_ids = adata.obs[cell_id_column].astype(str)
-    # Align cell_shapes to adata row order by cell_id
     cell_shapes_aligned = cell_shapes.loc[
         cell_shapes.index.astype(str).isin(set(cell_ids.tolist()))
     ]
-    # Use centroids for point-in-polygon test
     centroids = cell_shapes_aligned.geometry.centroid
-
     tissue_union = tissue_shapes.geometry.union_all()
-
     inside = centroids.within(tissue_union)
-    # Re-index to adata row order
     inside_series = inside.reindex(cell_ids.values, fill_value=False)
     keep_mask = inside_series.to_numpy(dtype=bool)
-
     n_dropped = int((~keep_mask).sum())
     return keep_mask, {"outside_tissue": n_dropped}
 
 
-__all__ = ["filter_by_tissue", "_ensure_tissue_shapes"]
+__all__ = ["run_tissue_segmentation", "filter_by_tissue"]
