@@ -81,9 +81,9 @@ Reference: [`references/filtering.md`](references/filtering.md). Two layers run 
 13. **Validate** alignment invariants (`expr_row == sample_index`, manifest `cell_id` ≡ `adata_out.obs.cell_id`, JPEG sizes, random-access reads)
 14. **(Compile step)** Merge per-sample dirs into a global manifest + h5ad. With `--bundle-wds`, also write `{compiled}/wds/` with each cell as a self-contained tar entry (jpg + sparse `.expr.npz` + json), plus `gene_panel.json` for column order.
 
-## Training the compiled dataset
+## Loading L3 artifacts for research and iteration
 
-Three loading paths produce the same `{image, expression, cell_id, sample_id}` shape:
+Three loading paths consume **L3 (dataset-compiled)** artifacts and produce the same `{image, expression, cell_id, sample_id}` shape. These are useful for research, iteration, and prototyping, but they are **not** L4 training-ready: splitting is handled in userspace via `sample_ids`, and no `splits/`, `task_config.yaml`, `loader_config.yaml`, or validation reports exist.
 
 | Path | When | Class / API |
 |---|---|---|
@@ -92,6 +92,112 @@ Three loading paths produce the same `{image, expression, cell_id, sample_id}` s
 | pure `webdataset` library | streaming pipelines, library-canonical workers | `webdataset.WebDataset(urls).decode(...)` — see `examples/wds_only_example.py` |
 
 The bundled and pure-wds paths require `--bundle-wds` on compile.
+
+To produce **L4 training-ready** artifacts — split-aware shards, `splits/train.json`, `gene_panel.json`, `task_config.yaml`, `loader_config.yaml`, and validation reports — run a task adapter. For HE2ST: `make_task_dataset.py`. See [`references/task-adapters.md`](references/task-adapters.md) and [`references/training-ready-contract.md`](references/training-ready-contract.md).
+
+## Task-Ready and Training-Ready Workflows
+
+### HE2ST task-ready request with explicit split assignment
+
+> "Process A_001,A_002,A_004 into a HE2ST training-ready dataset. Use A_001,A_002
+> as train and A_004 as validation. Filter tissue and nucleus cells. mpp=0.5,
+> patch size=224, sample 3000 cells per sample."
+
+The agent detects explicit `sample_holdout` split intent (`train=[A_001,A_002]`,
+`val=[A_004]`) and sets `training_ready_status: training_ready` in the stage plan.
+After execution:
+
+```
+he2st_task_ready/
+  data/shard-000000.tar  ...   ← all cells, NOT partitioned
+  splits/
+    split_membership.parquet
+    train.json  val.json  test.json
+    split_report.json
+  gene_panel.json  gene_panel.sha256
+  task_config.yaml  loader_config.yaml
+  dataset_card.json  validation_report.json
+```
+
+Loader usage:
+
+```python
+from daas.dataset import HE2STDataset
+
+ds = HE2STDataset.from_config(".../he2st_task_ready/loader_config.yaml", split="train")
+# Selects train cells via splits/split_membership.parquet at runtime.
+# Does NOT look for a physical train/ shard directory.
+```
+
+---
+
+### HE2ST request without split assignment — agent prompts
+
+> "Process A_001,A_002,A_004 into a HE2ST training-ready dataset. Filter tissue
+> and nucleus cells. mpp=0.5, patch size=224, sample 3000 cells per sample."
+
+No split information detected. The agent **must not** invent a split silently.
+
+The agent responds:
+
+> Split metadata is required before this dataset can be fully training-ready.
+> Please choose one of:
+>
+> A. sample_holdout — provide train/val/test sample lists (no sample_id leaks)
+> B. ratio_by_group — provide ratios + grouping column (sample_id, patient_id, donor_id …)
+> C. group_kfold — provide grouping column + number of folds (each group in exactly one fold)
+> D. existing_split_file — provide path to existing split file
+> E. defer_split — produce split-pending task skeleton now, add splits later
+>
+> Note: DAAS does not generate random cell-level splits. All generated splits
+> are sample-level or group-level to prevent sample/patient leakage.
+
+If the user chooses `defer_split`, the agent produces a task skeleton labeled
+`training_ready: false` with `split_required: true` in `loader_config.yaml`.
+
+---
+
+### Later split generation over an existing compiled dataset
+
+> "Use A_001,A_002 as train and A_004 as val for the HE2ST dataset we already compiled."
+
+The agent reuses existing compiled artifacts without rewriting any shards:
+
+```bash
+python3 ${SKILL_DIR}/scripts/make_split.py \
+    --compiled-dir .../compiled \
+    --task he2st \
+    --policy sample_holdout \
+    --train-samples A_001,A_002 \
+    --val-samples A_004 \
+    --output-split-dir .../compiled/splits/he2st
+```
+
+This writes only:
+- `splits/split_membership.parquet`
+- `splits/train.json`, `splits/val.json`
+- `splits/split_report.json`
+
+Then updates `loader_config.yaml` and `dataset_card.json` (`training_ready: true`).
+**No image or expression shards are rewritten.**
+
+---
+
+### Loader usage
+
+```python
+from daas.dataset import HE2STDataset
+
+# Fully training-ready (split metadata present):
+ds_train = HE2STDataset.from_config(".../loader_config.yaml", split="train")
+ds_val   = HE2STDataset.from_config(".../loader_config.yaml", split="val")
+
+# If split metadata is missing, this fails with a clear message:
+# HE2STDataset requires split metadata. Run make_split.py to generate
+# splits/split_membership.parquet before loading with split="train".
+```
+
+---
 
 ## Tips
 

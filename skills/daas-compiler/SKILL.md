@@ -10,17 +10,24 @@ They cannot be overridden by conversational context.
 
 **Stage plan required.** The agent must produce and present an explicit stage plan
 before executing any multi-step workflow (filtering → extraction → compile → task-ready).
-See `references/agent-contract.md` for required stage plan fields.
+See `references/agent-contract.md` for required stage plan fields, including `task_type`,
+`filter_stages`, `final_table_key`, `split_config`, and `loader_config`.
 
 **Preserve the training-ready contract.** The agent must not describe outputs as
-"training-ready" unless a task-ready packaging stage has produced splits, loader-ready
-artifacts, and validation reports. See `references/training-ready-contract.md`.
+"training-ready" unless a task-ready packaging stage has produced split metadata,
+loader-ready artifacts, and validation reports. See `references/training-ready-contract.md`.
 
 **Distinguish artifact levels.** The agent must use correct level terminology in all
 responses:
 - L2 = patch-compiled (`extract_sample.py` output)
 - L3 = dataset-compiled (`compile_dataset.py` output)
-- L4 = training-ready (task adapter output, task-specific)
+- L4 = training-ready (task adapter output, task-specific, split-aware via metadata)
+
+**Do not physically partition shards by split by default.** The default L4 output stores
+all cells in `data/shard-*.tar`. Split selection is done by the loader at runtime via
+`splits/split_membership.parquet`. Physical `train/`, `val/`, `test/` shard directories
+require an explicit `--materialize-split-shards` flag and must not be described as the
+default layout.
 
 **Follow versioning and commit rules.** When modifying the skill (SKILL.md, scripts,
 daas/ package), the agent must follow the commit scopes in `CONTRIBUTING.md` and note
@@ -29,6 +36,22 @@ any schema version bumps required by `VERSIONING.md`.
 **No silent behavior changes.** The agent must not silently change default filtering,
 extraction, or task-ready packaging behavior. Any change to defaults must be announced
 to the user and reflected in the stage plan before execution.
+
+**Consult reference docs for task-ready requests.** Before producing any L4 output plan:
+- `references/training-ready-contract.md` — what L4 requires
+- `references/artifact-levels.md` — level definitions and distinctions
+- `references/task-adapters.md` — task-specific artifact layouts
+- `references/agent-contract.md` — stage plan fields and worked example
+
+**For complex spatial transcriptomics training tasks, first consult
+`references/agent-contract.md` and create a stage plan.** The agent must
+distinguish patch-compiled (L2), dataset-compiled (L3), split-pending task
+skeleton, and fully training-ready (L4) artifacts. Splits are metadata consumed
+by loaders at runtime — do not physically split shards by default. If split
+allocation is missing, prompt the user or produce split-pending artifacts, not
+a falsely training-ready dataset. Generated splits must be sample-level or
+group-level (`sample_holdout`, `ratio_by_group`, `group_kfold`); DAAS never
+generates random cell-level train/val/test splits.
 
 ---
 
@@ -190,9 +213,9 @@ python3 ${SKILL_DIR}/scripts/compile_dataset.py \
 ## Three-Phase Architecture
 
 ```
-N × SpatialData.zarr
+N × SpatialData.zarr  [L0 raw / L1 canonical after filter stages]
         │
-        │  [Phase 1: extract]  per-sample, parallelizable
+        │  [Phase 1: extract]  per-sample, parallelizable  → L2 patch-compiled
         ▼
 per-sample/
   {sample_id}/
@@ -200,11 +223,12 @@ per-sample/
     shard-{N:06d}.idx     binary offset index (CIDX0001)
     expression.h5ad       raw counts sparse matrix
     manifest.parquet      per-cell metadata
+    filter_report.json
     viz/
       viz_global_tiles.png         lazyslide.pl.tiles overview (dpi=300, pre-shard)
       viz_patch_grid.png           5×5 random cells with cell+nucleus boundary overlays (dpi=300, pre-shard)
         │
-        │  [Phase 2: compile]  run once all samples done, <2 min
+        │  [Phase 2: compile]  run once all samples done, <2 min  → L3 dataset-compiled
         ▼
 compiled/
   manifest.parquet        global_idx → image location + expr location
@@ -213,14 +237,28 @@ compiled/
     shard-NNNNNN.tar      jpg + expr.npz + json per cell
   gene_panel.json         [--bundle-wds] gene names matching .expr.npz indices
   bundled_manifest.parquet  [--bundle-wds] cell_id, sample_id, shard_path, global_idx
-        │
-        │  [Phase 3: train]
+        │                 ← L3 artifacts are NOT training-ready
+        │  [Phase 3: task-ready packaging]  task adapter  → L4 training-ready
         ▼
-CellPatchDataset(manifest, h5ad, sample_ids=[...])           # mmap path
-BundledCellPatchDataset(wds_dir, sample_ids=[...])           # no-mmap path
+{task_output}/
+  data/
+    shard-000000.tar  ...   ← all cells, NOT split-partitioned
+  splits/
+    train.json  val.json  test.json   ← split membership metadata
+    split_membership.parquet          ← per-cell: global_idx, sample_id, split
+    split_report.json
+  gene_panel.json  gene_panel.sha256
+  task_config.yaml  loader_config.yaml
+  dataset_card.json  validation_report.json
 ```
 
 **Key invariant:** `compiled/manifest.parquet` row `i` == `compiled/expression.h5ad` row `i` == `global_idx=i`. Both are produced by the same `sorted()` traversal in compile.
+
+**Split policy:** Splits are metadata. The loader filters by `splits/split_membership.parquet`
+at runtime. Physical `train/`, `val/`, `test/` shard directories are NOT produced by default.
+Use `--materialize-split-shards` only when an explicit export is needed.
+
+**L3 → L4:** `CellPatchDataset` and `BundledCellPatchDataset` consume L3 artifacts directly. They are useful for research and iteration but do NOT constitute L4 training-ready output — the loader must still handle splitting (via `sample_ids`), and no `splits/`, `task_config.yaml`, `loader_config.yaml`, or validation reports exist. To produce L4, run a task adapter (e.g., `make_task_dataset.py` for HE2ST).
 
 ---
 

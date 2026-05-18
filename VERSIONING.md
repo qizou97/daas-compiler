@@ -20,7 +20,7 @@ While the version is below `1.0.0`:
 
 | Version type | Where it lives | What it governs |
 |---|---|---|
-| Code version | `skills/daas-compiler/pyproject.toml` → `version` | Python package |
+| Package version | `skills/daas-compiler/pyproject.toml` → `version` | Python package |
 | Skill version | `SKILL.md` frontmatter, marketplace metadata | Agent behavior contract |
 | Artifact schema versions | JSON/YAML output field values | Shape of runtime output files |
 | Task dataset contract versions | `task_config.yaml`, `dataset_card.json` | L4 training-ready artifact layout |
@@ -39,21 +39,56 @@ format changes in a backwards-incompatible way.
 | `wds_metadata_schema_version` | Per-cell `.json` inside shards | Field added, renamed, or removed |
 | `gene_panel_schema_version` | `gene_panel.json` | Structure changes (currently a flat list) |
 | `task_dataset_schema_version` | `dataset_card.json` | Field added, renamed, or removed |
-| `split_schema_version` | `split_report.json` | Field added, renamed, or removed |
-| `loader_config_schema_version` | `loader_config.yaml` | Field added, renamed, or removed |
+| `split_schema_version` | `splits/split_membership.parquet`, `splits/*.json` | Field added, renamed; split membership format changes |
+| `loader_config_schema_version` | `loader_config.yaml` | Field added, renamed, or removed; shard path schema changes |
 
 Schema version fields use integer counters starting at `1`.
 
 ## When to Bump the Package Version
 
-| Change | Version to bump |
-|---|---|
-| Bug fix, no output change | PATCH |
-| New optional CLI flag, new optional output field | PATCH (also bump the relevant schema version) |
-| New stage, new script, new task adapter | MINOR |
-| Output schema change (field renamed or removed) | MINOR (also bump the relevant schema version) |
-| API removal or breaking behavior change | MINOR (pre-1.0) or MAJOR (post-1.0) |
-| Training-ready contract change (L4 layout) | MINOR — this is a contract change, not a docs change |
+### MAJOR
+
+Breaking changes that require consumers to update their pipelines or loaders:
+
+- Breaking output artifact schemas (field renamed or removed)
+- Breaking manifest/expression/global_idx alignment
+- Breaking WebDataset metadata layout
+- Changing gene vector interpretation (gene order, normalization contract)
+- Changing split semantics in an incompatible way (e.g., split_membership schema)
+- Changing loader_config contract incompatibly
+
+### MINOR
+
+Additive changes that may require new task adapter runs or new optional dependencies:
+
+- New task adapter
+- New filtering recipe or filter stage
+- New optional dependency group
+- New optional report fields (while preserving existing fields)
+- New split policy or split export mode
+- New validation or visualization stage
+- New CLI flag with additive output
+
+### PATCH
+
+Safe changes with no output contract impact:
+
+- Bug fixes with identical output semantics
+- Documentation fixes
+- Validation improvements that do not change successful output semantics
+- Performance improvements with identical output contract
+- More robust key detection or error messages
+
+## Split and Loader Contract Rules
+
+- **Split metadata format changes** require bumping `split_schema_version` in affected output files.
+- **Loader config changes** require bumping `loader_config_schema_version`.
+- **Changing the default split behavior** (e.g., switching from metadata-based to physical
+  shard partitioning, or vice versa) is a MINOR version bump with required `CHANGELOG.md` entry.
+- The current default: splits are metadata in `splits/split_membership.parquet` — physical
+  `train/`, `val/`, `test/` shard directories are an optional export mode only.
+
+## Contract Change Rules
 
 **Changing the definition or layout of training-ready task datasets is a contract
 change, not just a docs change.** It must be accompanied by:
@@ -62,12 +97,13 @@ change, not just a docs change.** It must be accompanied by:
 - Updated documentation in `references/training-ready-contract.md` and the relevant
   task adapter in `references/task-adapters.md`
 - Updated tests
+- Default behavior changes documented in `CHANGELOG.md`
 
 ## How to Bump the Version
 
 1. Update `version` in `skills/daas-compiler/pyproject.toml`
 2. Update `CHANGELOG.md`: move `[Unreleased]` items to a new version section, add the date
-3. Commit: `chore(release): bump to vX.Y.Z`
+3. Commit: `release: bump to vX.Y.Z`
 4. Tag: `git tag vX.Y.Z`
 
 See `RELEASE.md` for the full release checklist.
