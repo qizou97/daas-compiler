@@ -94,11 +94,6 @@ def synthetic_sample(tmp_path):
 @pytest.fixture
 def compiled_dir(tmp_path, synthetic_sample):
     """Minimal compiled/ directory with bundled WDS shard, gene_panel, manifest."""
-    import json, tarfile, io
-    import numpy as np
-    from scipy.sparse import csr_matrix
-    import anndata
-
     cd = tmp_path / "compiled"
     cd.mkdir()
 
@@ -124,6 +119,7 @@ def compiled_dir(tmp_path, synthetic_sample):
             values  = np.array([1.0, 2.0], dtype=np.float32)
             npz_buf = io.BytesIO()
             np.savez(npz_buf, indices=indices, values=values)
+            # 'task' field per HE2ST training-ready spec; compile_dataset.py may not write it yet
             meta_bytes = json.dumps({
                 "global_idx": i, "sample_id": sample_id,
                 "cell_id": f"cell_{i}", "task": "he2st",
