@@ -60,7 +60,7 @@ def test_run_tissue_segmentation_raises_if_sopa_creates_nothing():
 def test_run_tissue_segmentation_raises_if_sopa_not_installed():
     sdata = _make_sdata(["cell_circles"])
     with patch.dict("sys.modules", {"sopa": None, "sopa.segmentation": None}):
-        with pytest.raises((ImportError, TypeError)):
+        with pytest.raises(ImportError):
             run_tissue_segmentation(sdata, image_key="he_image")
 
 

@@ -45,8 +45,6 @@ def filter_by_tissue(
     cell_shapes: GeoDataFrame with Point or Polygon geometries
     tissue_shapes: GeoDataFrame with Polygon geometries (tissue regions)
     """
-    import geopandas as gpd
-
     cell_ids = adata.obs[cell_id_column].astype(str)
     cell_shapes_aligned = cell_shapes.loc[
         cell_shapes.index.astype(str).isin(set(cell_ids.tolist()))
