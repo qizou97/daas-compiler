@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daas-compiler"
-version = "0.5.1"
+version = "0.5.2"
 description = "Cell-centered HE patch dataset compiler"
 requires-python = ">=3.10"
 license = { text = "MIT" }
