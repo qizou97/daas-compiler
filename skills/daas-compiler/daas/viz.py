@@ -34,6 +34,14 @@ _NUCLEUS_CANDIDATES = [
 ]
 
 
+def _um_to_px(coords_um, x0, y0, scale_shape, scale):
+    arr = np.array(coords_um)
+    return np.column_stack([
+        (arr[:, 0] * scale_shape - x0) * scale,
+        (arr[:, 1] * scale_shape - y0) * scale,
+    ])
+
+
 def _resolve_key(shapes_keys: set, candidates: list[str], hint: str) -> str | None:
     if hint == "none":
         return None
@@ -62,7 +70,7 @@ def save_tiles_overview(
     wsi,
     sdata=None,
     tissue_key: str | None = None,
-    SCALE_SHAPE: float = 1.0,
+    scale_shape: float = 1.0,
     dpi: int = 300,
 ) -> dict:
     """Render lazyslide tiles overview and optionally a tissue overlay variant.
@@ -87,6 +95,7 @@ def save_tiles_overview(
     overlay_path = None
     if tissue_key is not None and sdata is not None:
         try:
+            from shapely.geometry import MultiPolygon
             tissue_gdf = sdata.shapes[tissue_key]
             lpl.tiles(wsi, tile_key="cell_tiles")
             fig2 = plt.gcf()
@@ -95,14 +104,13 @@ def save_tiles_overview(
                 if geom is None:
                     continue
                 try:
-                    from shapely.geometry import MultiPolygon
                     polys = (list(geom.geoms)
                              if isinstance(geom, MultiPolygon) else [geom])
                     for poly in polys:
                         xs, ys = poly.exterior.xy
                         ax.plot(
-                            [x * SCALE_SHAPE for x in xs],
-                            [y * SCALE_SHAPE for y in ys],
+                            [x * scale_shape for x in xs],
+                            [y * scale_shape for y in ys],
                             color="lime", linewidth=1.0, alpha=0.8,
                         )
                 except Exception as e:
@@ -127,9 +135,9 @@ def save_patch_grid(
     x0s,
     y0s,
     sdata,
-    SCALE_SHAPE: float,
-    PATCH_SIZE: int,
-    BASE_SIZE: int,
+    scale_shape: float,
+    patch_size: int,
+    base_size: int,
     sample_id: str,
     viz_dir,
     cell_key: str | None = None,
@@ -148,24 +156,17 @@ def save_patch_grid(
     nucl_bounds = (sdata.shapes[nucleus_key]
                    if nucleus_key and nucleus_key in sdata.shapes else None)
     nucl_ids = set(nucl_bounds.index) if nucl_bounds is not None else set()
-    SCALE = PATCH_SIZE / BASE_SIZE
+    SCALE = patch_size / base_size
 
-    def _um_to_px(coords_um, x0, y0):
-        arr = np.array(coords_um)
-        return np.column_stack([
-            (arr[:, 0] * SCALE_SHAPE - x0) * SCALE,
-            (arr[:, 1] * SCALE_SHAPE - y0) * SCALE,
-        ])
-
-    n_test = len(images)
-    n_cols = int(np.ceil(np.sqrt(n_test)))
-    n_rows = int(np.ceil(n_test / n_cols))
+    n_cells = len(images)
+    n_cols = int(np.ceil(np.sqrt(n_cells)))
+    n_rows = int(np.ceil(n_cells / n_cols))
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(n_cols * 2.8, n_rows * 2.8))
-    if n_test == 1:
+    if n_cells == 1:
         axes = np.array([axes])
     axes_flat = np.array(axes).flat
 
-    for i in range(n_test):
+    for i in range(n_cells):
         ax = axes_flat[i]
         ax.imshow(images[i])
         cell_id = cell_ids[i]
@@ -173,7 +174,8 @@ def save_patch_grid(
         if cell_bounds is not None:
             try:
                 cb_pts = _um_to_px(
-                    list(cell_bounds.loc[cell_id, "geometry"].exterior.coords), x0, y0)
+                    list(cell_bounds.loc[cell_id, "geometry"].exterior.coords),
+                    x0, y0, scale_shape, SCALE)
                 ax.add_patch(MplPolygon(cb_pts, closed=True,
                                         edgecolor="cyan", facecolor="none",
                                         linewidth=0.8, alpha=0.9))
@@ -182,27 +184,28 @@ def save_patch_grid(
         if nucl_bounds is not None and cell_id in nucl_ids:
             try:
                 nb_pts = _um_to_px(
-                    list(nucl_bounds.loc[cell_id, "geometry"].exterior.coords), x0, y0)
+                    list(nucl_bounds.loc[cell_id, "geometry"].exterior.coords),
+                    x0, y0, scale_shape, SCALE)
                 ax.add_patch(MplPolygon(nb_pts, closed=True,
                                         edgecolor="yellow", facecolor="none",
                                         linewidth=0.8, alpha=0.9))
             except KeyError:
                 pass
-        cx = cy = PATCH_SIZE / 2
-        arm = PATCH_SIZE * 0.08
+        cx = cy = patch_size / 2
+        arm = patch_size * 0.08
         ax.plot([cx - arm, cx + arm], [cy, cy], color="red", lw=0.8, alpha=0.9)
         ax.plot([cx, cx], [cy - arm, cy + arm], color="red", lw=0.8, alpha=0.9)
-        ax.set_xlim(0, PATCH_SIZE)
-        ax.set_ylim(PATCH_SIZE, 0)
+        ax.set_xlim(0, patch_size)
+        ax.set_ylim(patch_size, 0)
         ax.set_title(str(cell_id)[:12], fontsize=5)
         ax.axis("off")
 
-    for j in range(n_test, len(list(np.array(axes).flat))):
+    for j in range(n_cells, len(list(np.array(axes).flat))):
         np.array(axes).flat[j].axis("off")
 
     fig.suptitle(
         f"{sample_id} — patch grid pre-flight "
-        f"({n_test} cells, cyan=cell  yellow=nucleus  +=center)",
+        f"({n_cells} cells, cyan=cell  yellow=nucleus  +=center)",
         fontsize=9, y=0.995,
     )
     plt.tight_layout()
@@ -218,7 +221,7 @@ def save_saved_patch_grid(
     viz_dir,
     sample_id: str,
     patch_size: int,
-    SCALE_SHAPE: float,
+    scale_shape: float,
     x0_col: str = "bbox_x0",
     y0_col: str = "bbox_y0",
     cell_key: str | None = None,
@@ -272,7 +275,7 @@ def save_saved_patch_grid(
             if shard_path not in open_tars:
                 try:
                     open_tars[shard_path] = tarfile.open(shard_path, "r")
-                except Exception:
+                except (OSError, tarfile.TarError):
                     missing_members += 1
                     continue
 
@@ -302,13 +305,7 @@ def save_saved_patch_grid(
         for tf in open_tars.values():
             tf.close()
 
-    def _um_to_px(coords_um, x0, y0):
-        arr = np.array(coords_um)
-        SCALE = patch_size / base_size
-        return np.column_stack([
-            (arr[:, 0] * SCALE_SHAPE - x0) * SCALE,
-            (arr[:, 1] * SCALE_SHAPE - y0) * SCALE,
-        ])
+    SCALE = patch_size / base_size
 
     n_rendered = len(images)
     if n_rendered == 0:
@@ -337,7 +334,8 @@ def save_saved_patch_grid(
         if cell_bounds is not None:
             try:
                 cb_pts = _um_to_px(
-                    list(cell_bounds.loc[cell_id, "geometry"].exterior.coords), x0, y0)
+                    list(cell_bounds.loc[cell_id, "geometry"].exterior.coords),
+                    x0, y0, scale_shape, SCALE)
                 ax.add_patch(MplPolygon(cb_pts, closed=True,
                                         edgecolor="cyan", facecolor="none",
                                         linewidth=0.8, alpha=0.9))
@@ -346,7 +344,8 @@ def save_saved_patch_grid(
         if nucl_bounds is not None and cell_id in nucl_ids:
             try:
                 nb_pts = _um_to_px(
-                    list(nucl_bounds.loc[cell_id, "geometry"].exterior.coords), x0, y0)
+                    list(nucl_bounds.loc[cell_id, "geometry"].exterior.coords),
+                    x0, y0, scale_shape, SCALE)
                 ax.add_patch(MplPolygon(nb_pts, closed=True,
                                         edgecolor="yellow", facecolor="none",
                                         linewidth=0.8, alpha=0.9))

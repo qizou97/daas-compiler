@@ -104,7 +104,7 @@ def test_save_saved_patch_grid_renders_grid(tmp_path):
         viz_dir=viz_dir,
         sample_id="TEST",
         patch_size=patch_size,
-        SCALE_SHAPE=1.0,
+        scale_shape=1.0,
         base_size=patch_size,
     )
     assert (viz_dir / "viz_saved_patch_grid.png").exists()
@@ -133,11 +133,39 @@ def test_save_saved_patch_grid_handles_missing_jpg(tmp_path):
     viz_dir = tmp_path / "viz"
     result = save_saved_patch_grid(
         manifest_df=manifest, sdata=sdata, viz_dir=viz_dir,
-        sample_id="TEST", patch_size=patch_size, SCALE_SHAPE=1.0,
+        sample_id="TEST", patch_size=patch_size, scale_shape=1.0,
         base_size=patch_size,
     )
     assert result["missing_members"] == 1
     assert result["n_rendered"] == 1
+
+
+def test_save_saved_patch_grid_decode_error(tmp_path):
+    """A member whose bytes are not a valid JPEG is counted in decode_errors."""
+    patch_size = 32
+    shard = tmp_path / "shard-000000.tar"
+    corrupt_bytes = b"not-a-jpeg"
+    with tarfile.open(shard, "w") as tf:
+        ti = tarfile.TarInfo(name="0000000.jpg")
+        ti.size = len(corrupt_bytes)
+        tf.addfile(ti, io.BytesIO(corrupt_bytes))
+        meta = json.dumps({"sample_key": "0000000"}).encode()
+        ti2 = tarfile.TarInfo(name="0000000.json")
+        ti2.size = len(meta)
+        tf.addfile(ti2, io.BytesIO(meta))
+
+    rows = [{"shard_path": str(shard), "sample_key": "0000000",
+             "cell_id": "c0", "bbox_x0": 0.0, "bbox_y0": 0.0}]
+    manifest = pd.DataFrame(rows)
+    sdata = _mock_sdata([])
+    viz_dir = tmp_path / "viz"
+    result = save_saved_patch_grid(
+        manifest_df=manifest, sdata=sdata, viz_dir=viz_dir,
+        sample_id="TEST", patch_size=patch_size, scale_shape=1.0,
+        base_size=patch_size,
+    )
+    assert result["decode_errors"] == 1
+    assert result["n_rendered"] == 0
 
 
 def test_save_saved_patch_grid_bad_image_size(tmp_path):
@@ -165,7 +193,7 @@ def test_save_saved_patch_grid_bad_image_size(tmp_path):
     viz_dir = tmp_path / "viz"
     result = save_saved_patch_grid(
         manifest_df=manifest, sdata=sdata, viz_dir=viz_dir,
-        sample_id="TEST", patch_size=patch_size, SCALE_SHAPE=1.0,
+        sample_id="TEST", patch_size=patch_size, scale_shape=1.0,
         base_size=patch_size,
     )
     assert result["bad_image_size"] == 1
