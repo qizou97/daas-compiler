@@ -37,6 +37,15 @@ test = [
   "geopandas>=0.14",
   "shapely>=2.0",
 ]
+preprocess = [
+  "sopa",
+  "geopandas>=0.14",
+  "shapely>=2.0",
+  "scikit-image",
+]
+tasks = [
+  "pyyaml>=6",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,0 +1,4 @@
+sopa
+geopandas>=0.14
+shapely>=2.0
+scikit-image
