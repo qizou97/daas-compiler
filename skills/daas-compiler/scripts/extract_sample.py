@@ -23,6 +23,20 @@ from wsidata import open_wsi, TileSpec
 from wsidata.io import add_tiles
 import lazyslide.pl as lpl
 
+from daas.filtering import (
+    BiologicalPolicy,
+    PatchPolicy,
+    build_filter_report,
+    mask_patch_policy,
+    mask_positive_centroid,
+    resolve_biological_policy,
+    resolve_patch_policy,
+    resolve_table_shape_alignment,
+    write_filter_report,
+)
+
+DEFAULT_TABLE_KEY = "table"
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def parse_args():
     p = argparse.ArgumentParser()
@@ -38,12 +52,30 @@ def parse_args():
     p.add_argument("--seed",        type=int, default=42)
     p.add_argument("--image-key",   default="he_image")
     p.add_argument("--shapes-key",  default="cell_circles")
-    p.add_argument("--table-key",   default="table")
+    p.add_argument("--table-key",   default=DEFAULT_TABLE_KEY)
     p.add_argument("--extract-mode", default="tile_images",
                    choices=["tile_images", "full_scale0", "full_ops_level"],
                    help="Patch extraction strategy: tile_images (default, "
                         "low mem), full_scale0 (fast, ~1.6 GB), "
                         "full_ops_level (fastest, ~0.4 GB)")
+    p.add_argument("--biological-filter-policy",
+                   default=BiologicalPolicy.AUTO.value,
+                   choices=[p.value for p in BiologicalPolicy],
+                   help="Layer 1: cell-level filtering policy. 'auto' uses "
+                        "filtered_table when present and --table-key was not "
+                        "explicitly set; otherwise falls back to 'none'.")
+    p.add_argument("--patch-filter-policy",
+                   default=PatchPolicy.AUTO.value,
+                   choices=[p.value for p in PatchPolicy],
+                   help="Layer 2: patch-validity policy. 'auto' resolves to "
+                        "'strict_no_padding' (drop full_oob and need_pad). "
+                        "'stvisuome_minimal' keeps boundary-crossing tiles "
+                        "and is only valid with --extract-mode tile_images. "
+                        "'strict_with_padding' is reserved (raises).")
+    p.add_argument("--cell-id-column",        default="cell_id")
+    p.add_argument("--nucleus-boundaries-key", default="nucleus_boundaries")
+    p.add_argument("--filtered-table-key",    default="filtered_table")
+    p.add_argument("--filter-report-name",    default="filter_report.json")
     return p.parse_args()
 
 # ── IDX format ────────────────────────────────────────────────────────────────
@@ -200,17 +232,52 @@ def main():
     # ── Phase 1: Load ─────────────────────────────────────────────────────────
     print(f"[1/9] Loading {zarr_path} …")
     sdata  = sd.read_zarr(zarr_path)
-    gdf    = sdata.shapes[args.shapes_key]
-    adata  = sdata.tables[args.table_key]
-    assert list(gdf.index) == list(adata.obs["cell_id"]), \
-        "cell_id row-order mismatch"
+
+    # ── Phase 1b: Biological filter (Layer 1) ────────────────────────────────
+    bio_policy = BiologicalPolicy(args.biological_filter_policy)
+    bio = resolve_biological_policy(
+        sdata=sdata,
+        table_key=args.table_key,
+        shapes_key=args.shapes_key,
+        policy=bio_policy,
+        table_key_was_default=(args.table_key == DEFAULT_TABLE_KEY),
+        filtered_table_key=args.filtered_table_key,
+        nucleus_boundaries_key=args.nucleus_boundaries_key,
+        cell_id_column=args.cell_id_column,
+    )
+    table_key_used  = bio.table_key_used
+    shapes_key_used = bio.shapes_key_used
+    print(f"      [bio] policy_requested={bio.policy_requested.value} "
+          f"applied={bio.policy_applied.value}  "
+          f"table={table_key_used}  shapes={shapes_key_used}  "
+          f"{bio.n_cells_source} → {bio.n_after_biological_filter}")
+    for warn in bio.warnings:
+        print(f"      [bio:warn] {warn}")
+
+    adata_after_bio = sdata.tables[table_key_used]
+    if bio.keep_table_mask is not None:
+        adata_after_bio = adata_after_bio[bio.keep_table_mask].copy()
+    gdf_full = sdata.shapes[shapes_key_used]
+
+    align = resolve_table_shape_alignment(
+        adata_after_bio, gdf_full, cell_id_column=args.cell_id_column,
+    )
+    if align.alignment_mode != "exact":
+        print(f"      [align] non-exact alignment: "
+              f"{align.n_aligned} aligned rows from table={align.n_table_in}, "
+              f"shapes={align.n_shape_in}")
+    adata = adata_after_bio[align.adata_row_indices].copy()
+    gdf   = gdf_full.iloc[align.shape_row_indices].copy()
+    unaligned_dropped = bio.n_after_biological_filter - int(adata.n_obs)
     print(f"      {len(gdf)} cells, {adata.n_vars} genes — alignment OK")
 
     # ── Phase 2: MPP derivation ───────────────────────────────────────────────
     print("[2/9] Deriving SLIDE_MPP …")
     img_tf    = get_transformation(sdata.images[args.image_key],
                                    to_coordinate_system="global")
-    shape_tf  = get_transformation(gdf, to_coordinate_system="global")
+    # Use the un-sliced shape layer so the SpatialData transformation
+    # metadata is preserved (iloc-sliced GeoDataFrames may drop it).
+    shape_tf  = get_transformation(gdf_full, to_coordinate_system="global")
     img_aff   = img_tf.to_affine_matrix(input_axes=("y","x"),
                                          output_axes=("y","x"))
     shape_aff = shape_tf.to_affine_matrix(input_axes=("y","x"),
@@ -228,8 +295,8 @@ def main():
     _, IMG_H, IMG_W     = scale0_img.shape
     print(f"      SLIDE_MPP={SLIDE_MPP:.6f}  BASE_SIZE={BASE_SIZE}")
 
-    # ── Phase 3: OOB filtering ────────────────────────────────────────────────
-    print("[3/9] Filtering OOB …")
+    # ── Phase 3: Patch-validity filtering (Layer 2) ──────────────────────────
+    print("[3/9] Filtering by patch policy …")
     centroids = gdf.geometry
     cx_um = np.array([c.x for c in centroids], dtype=np.float64)
     cy_um = np.array([c.y for c in centroids], dtype=np.float64)
@@ -237,17 +304,32 @@ def main():
     cy_px = cy_um * SCALE_SHAPE
     sx0 = cx_px - BASE_HALF
     sy0 = cy_px - BASE_HALF
-    full_oob = ((sx0+BASE_SIZE<=0)|(sx0>=IMG_W)|(sy0+BASE_SIZE<=0)|(sy0>=IMG_H))
-    need_pad = (((sx0<0)|(sx0+BASE_SIZE>IMG_W)|(sy0<0)|(sy0+BASE_SIZE>IMG_H))
-                & ~full_oob)
-    valid_mask = ~full_oob & ~need_pad
-    n_valid = valid_mask.sum()
-    print(f"      valid={n_valid}  full_oob={full_oob.sum()}  "
-          f"need_pad={need_pad.sum()}")
+
+    requested_patch_policy = PatchPolicy(args.patch_filter_policy)
+    patch_policy_applied   = resolve_patch_policy(
+        requested_patch_policy, args.extract_mode
+    )
+
+    pos_mask = mask_positive_centroid(cx_px, cy_px)
+    n_after_positive_centroid = int(pos_mask.sum())
+
+    patch_res = mask_patch_policy(
+        sx0, sy0,
+        base_size=BASE_SIZE, img_w=IMG_W, img_h=IMG_H,
+        policy=patch_policy_applied,
+        extract_mode=args.extract_mode,
+    )
+    final_mask = pos_mask & patch_res.valid_mask
+    n_after_patch_policy = int(final_mask.sum())
+    n_valid = n_after_patch_policy
+    print(f"      valid={n_valid}  pos_centroid={n_after_positive_centroid}  "
+          f"full_oob={int(patch_res.full_oob_mask.sum())}  "
+          f"need_pad={int(patch_res.need_pad_mask.sum())}  "
+          f"policy={patch_res.policy}")
 
     # ── Phase 3b: Sampling ────────────────────────────────────────────────────
     rng           = np.random.default_rng(args.seed)
-    valid_indices = np.where(valid_mask)[0]
+    valid_indices = np.where(final_mask)[0]
     n_out         = args.n_sample if args.n_sample else n_valid
     assert n_out <= n_valid, f"n_sample={n_out} > n_valid={n_valid}"
     sampled_orig = (rng.choice(valid_indices, size=n_out, replace=False)
@@ -255,6 +337,47 @@ def main():
     cx_px_s = cx_px[sampled_orig]; cy_px_s = cy_px[sampled_orig]
     sx0_s   = sx0[sampled_orig];   sy0_s   = sy0[sampled_orig]
     gene_row_s = sampled_orig.copy()
+
+    # ── Phase 3c: Filter report (written BEFORE any shards) ──────────────────
+    drop_counts_by_reason: dict = {}
+    if unaligned_dropped:
+        drop_counts_by_reason["unaligned_with_shapes"] = int(unaligned_dropped)
+    drop_counts_by_reason.update({k: int(v) for k, v in bio.drop_counts.items()})
+    drop_counts_by_reason["non_positive_centroid"] = int((~pos_mask).sum())
+    drop_counts_by_reason.update(
+        {k: int(v) for k, v in patch_res.drop_counts.items()}
+    )
+    drop_counts_by_reason["requested_subsample"] = int(n_valid - n_out)
+
+    report_dict = build_filter_report(
+        sample_id=sample_id,
+        zarr_path=str(zarr_path),
+        output_dir=str(output_dir),
+        image_key=args.image_key,
+        extract_mode=args.extract_mode,
+        source_table_key=table_key_used,
+        source_shape_key=shapes_key_used,
+        biological_policy_requested=bio.policy_requested.value,
+        biological_policy_applied=bio.policy_applied.value,
+        patch_policy_requested=requested_patch_policy.value,
+        patch_policy_applied=patch_policy_applied.value,
+        n_cells_source=int(bio.n_cells_source),
+        n_after_biological_filter=int(adata.n_obs),
+        n_after_positive_centroid=int(n_after_positive_centroid),
+        n_after_patch_policy=int(n_after_patch_policy),
+        n_out=int(n_out),
+        drop_counts_by_reason=drop_counts_by_reason,
+        patch_size=int(PATCH_SIZE),
+        target_mpp=float(MPP_TGT),
+        slide_mpp=float(SLIDE_MPP),
+        base_size=int(BASE_SIZE),
+        seed=int(args.seed),
+        warnings=list(bio.warnings),
+    )
+    report_path = write_filter_report(
+        report_dict, output_dir, name=args.filter_report_name
+    )
+    print(f"      filter report → {report_path}")
 
     # ── Phase 4: Spatial sort ─────────────────────────────────────────────────
     sort_key = ((np.maximum(0,sy0_s)//4096)*10000
@@ -356,6 +479,8 @@ def main():
             "orig_cell_index":    orig_idx,
             "mpp_target":         MPP_TGT,
             "slide_mpp":          SLIDE_MPP,
+            "source_table_key":   table_key_used,
+            "source_shape_key":   shapes_key_used,
         }
         shard_buf.append((local_i, sk, jpg_bytes,
                           json.dumps(meta).encode()))
@@ -400,12 +525,14 @@ def main():
 
     # ── Phase 9: Validation ───────────────────────────────────────────────────
     print("[9/9] Validation …")
-    _validate(cells_df, adata_out, adata, BASE_HALF, n_out, rng, PATCH_SIZE)
+    _validate(cells_df, adata_out, adata, BASE_HALF, n_out, rng, PATCH_SIZE,
+              cell_id_column=args.cell_id_column)
 
     total_mb = sum(f.stat().st_size for f in output_dir.glob("*.tar")) / 1e6
     elapsed  = time.time()-t0
     n_shards_total = len(list(output_dir.glob("*.tar")))
-    viz_note = f"\n  viz outputs → {output_dir}/viz/"
+    viz_note = (f"\n  viz outputs → {output_dir}/viz/"
+                f"\n  filter report → {report_path}")
     print(f"""
 {'='*60}
   EXTRACT COMPLETE — {sample_id}  ({n_out} cells, {n_shards_total} shards, {total_mb:.0f}MB){viz_note}
@@ -423,18 +550,25 @@ print(adata)  # AnnData ({n_out}, {adata.n_vars})
   Total time: {elapsed:.1f}s
 """)
 
-def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size):
+def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size,
+              cell_id_column: str = "cell_id"):
     import io, tarfile
     from PIL import Image
     assert len(cells_df) == n_out == adata_out.n_obs
     assert cells_df["sample_key"].nunique() == n_out
     assert cells_df["cell_id"].nunique() == n_out
+    assert (cells_df["expr_row"].values == cells_df["sample_index"].values).all(), \
+        "expr_row != sample_index"
+    assert (cells_df["cell_id"].values == adata_out.obs["cell_id"].values).all(), \
+        "manifest cell_id != adata_out.obs cell_id"
     for i in range(min(200, n_out)):
         assert cells_df.iloc[i]["sample_key"] == adata_out.obs.iloc[i]["sample_key"]
         assert cells_df.iloc[i]["cell_id"] == adata_out.obs.iloc[i]["cell_id"]
+    resolved_ids = adata_in.obs[cell_id_column].astype(str).values
     for i in range(min(50, n_out)):
-        expected = adata_in.obs["cell_id"].iloc[int(cells_df.iloc[i]["gene_row_index"])]
-        assert cells_df.iloc[i]["cell_id"] == expected
+        expected = resolved_ids[int(cells_df.iloc[i]["gene_row_index"])]
+        assert str(cells_df.iloc[i]["cell_id"]) == expected, \
+            "gene_row_index does not point to the cell_id of the resolved table"
     bbox_err = np.abs(cells_df["bbox_x0"].values
                       - (cells_df["center_x_pixel"].values - BASE_HALF))
     assert bbox_err.max() < 1.0
@@ -445,7 +579,7 @@ def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size):
             jpg = tf.extractfile(f"{row['sample_key']}.jpg").read()
         img = Image.open(io.BytesIO(jpg))
         assert img.size == (patch_size, patch_size)
-    print("  [PASS] all 6 validation checks")
+    print("  [PASS] all validation checks")
 
 if __name__ == "__main__":
     main()

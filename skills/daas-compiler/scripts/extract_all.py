@@ -52,6 +52,19 @@ def parse_args():
     p.add_argument("--image-key",  default="he_image")
     p.add_argument("--shapes-key", default="cell_circles")
     p.add_argument("--table-key",  default="table")
+    p.add_argument("--extract-mode", default="tile_images",
+                   choices=["tile_images", "full_scale0", "full_ops_level"])
+    p.add_argument("--biological-filter-policy", default="auto",
+                   choices=["auto", "none",
+                            "stvisuome_canonical",
+                            "stvisuome_nucleus_boundary"])
+    p.add_argument("--patch-filter-policy", default="auto",
+                   choices=["auto", "strict_no_padding",
+                            "stvisuome_minimal", "strict_with_padding"])
+    p.add_argument("--cell-id-column",         default="cell_id")
+    p.add_argument("--nucleus-boundaries-key", default="nucleus_boundaries")
+    p.add_argument("--filtered-table-key",     default="filtered_table")
+    p.add_argument("--filter-report-name",     default="filter_report.json")
     return p.parse_args()
 
 
@@ -74,6 +87,13 @@ def main():
         "--image-key",  args.image_key,
         "--shapes-key", args.shapes_key,
         "--table-key",  args.table_key,
+        "--extract-mode", args.extract_mode,
+        "--biological-filter-policy", args.biological_filter_policy,
+        "--patch-filter-policy",      args.patch_filter_policy,
+        "--cell-id-column",           args.cell_id_column,
+        "--nucleus-boundaries-key",   args.nucleus_boundaries_key,
+        "--filtered-table-key",       args.filtered_table_key,
+        "--filter-report-name",       args.filter_report_name,
     ]
 
     done, skipped, failed = [], [], []

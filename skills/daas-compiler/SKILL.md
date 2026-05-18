@@ -85,17 +85,23 @@ python3 "${SKILL_DIR}/scripts/extract_sample.py" \
     [--sample-id A_002]        # default: inferred from zarr dirname
     [--n-sample 10000]         # default: all valid cells
     [--patch-size 224] [--mpp 0.5] [--shard-size 500] [--seed 42]
-    [--image-key he_image] [--shapes-key cell_circles] [--table-key table]
+    [--image-key he_image] [--shapes-key cell_circles] [--table-key table] \
+    # Filtering policy (see "Filtering policy" below):
+    [--biological-filter-policy auto|none|stvisuome_canonical|stvisuome_nucleus_boundary] \
+    [--patch-filter-policy auto|strict_no_padding|stvisuome_minimal|strict_with_padding] \
+    [--cell-id-column cell_id] [--nucleus-boundaries-key nucleus_boundaries] \
+    [--filtered-table-key filtered_table] [--filter-report-name filter_report.json]
 ```
 
 ### Output
 
 ```
 {output}/
-  shard-000000.tar   500 JPEG patches per shard
-  shard-000000.idx   binary offset index (CIDX0001, 32B/record)
-  expression.h5ad    AnnData (n_cells, n_genes), obs has sample_id
-  manifest.parquet   per-cell metadata (see columns below)
+  shard-000000.tar     500 JPEG patches per shard
+  shard-000000.idx     binary offset index (CIDX0001, 32B/record)
+  expression.h5ad      AnnData (n_cells, n_genes), obs has sample_id
+  manifest.parquet     per-cell metadata (see columns below)
+  filter_report.json   biological + patch policy applied, drop counts, warnings
 ```
 
 ### manifest.parquet columns
@@ -114,6 +120,60 @@ python3 "${SKILL_DIR}/scripts/extract_sample.py" \
 | `center_y_pixel` | float64 | centroid y in level-0 px |
 | `bbox_x0` | float64 | tile top-left x |
 | `bbox_y0` | float64 | tile top-left y |
+| `source_table_key` | str | table key that produced this cell (e.g. `filtered_table`) |
+| `source_shape_key` | str | shape key that produced this cell (e.g. `cell_circles`) |
+
+### Filtering policy
+
+> Full reference: [`references/filtering.md`](references/filtering.md).
+
+Two **independent** layers run before any shard is written. Always distinguish them when explaining behavior to the user:
+
+1. **Biological / canonical cell filtering** (`--biological-filter-policy`) — picks which table + shape layer is authoritative and which rows enter the pipeline.
+2. **Patch-validity filtering** (`--patch-filter-policy`) — decides which selected cells produce a tile that can be written safely.
+
+**Always prefer already-canonical stVisuome outputs when present.** If the zarr was produced by `stvisuome-daas preprocess`, it carries `filtered_table`, `filtered_nucleus_boundaries`, `filtered_cell_boundaries`, nucleus/cell centroid-pixel `obsm` fields, and `cell_tiles_{tile_size}`. Use those rather than the raw `table`/`cell_circles` whenever you can.
+
+**Never run upstream preprocessing inside daas-compiler.** No tissue segmentation, no Cellpose, no nucleus matching, no `log1p`, no zarr write-back. If those steps are missing, ask the user to run `stvisuome-daas preprocess` first.
+
+#### Layer 1 — biological policies
+
+| Policy | Behavior |
+|---|---|
+| `auto` (default) | If `filtered_table` is present **and** `--table-key` is at its default → use `filtered_table` (i.e. `stvisuome_canonical`). Otherwise → `none` (warns if `filtered_table` exists but the user named a different table). |
+| `stvisuome_canonical` | Require `filtered_table` to exist; consume it as authoritative. Shapes still come from `--shapes-key`; alignment is by `cell_id`. |
+| `stvisuome_nucleus_boundary` | Keep only table rows whose `obs[cell_id]` appears in `sdata.shapes[nucleus_boundaries].index`. Fails if no overlap. |
+| `none` | Use `--table-key` / `--shapes-key` unchanged; warn that no biological filtering was applied. |
+
+Alignment after Layer 1 uses `resolve_table_shape_alignment`: exact row-order match preferred; otherwise intersection by `cell_id` preserving table row order. Empty intersection is a hard error.
+
+#### Layer 2 — patch policies
+
+| Policy | Drops | Allowed extract modes |
+|---|---|---|
+| `auto` (default) | Resolves to `strict_no_padding`. | All. |
+| `strict_no_padding` | `full_oob` ∪ `need_pad`. **Required for `full_scale0` / `full_ops_level`** unless explicit padding is implemented — those modes silently clip boundary-crossing tiles. | All. |
+| `stvisuome_minimal` | `full_oob` only; keeps `need_pad` (boundary-crossing tiles). Use when the user wants stVisuome-like boundary behavior. | **`tile_images` only** — wsidata handles partial reads; rejected for `full_*` modes. |
+| `strict_with_padding` | Reserved. Raises `NotImplementedError` until explicit padding is implemented and tested. | — |
+
+Positive-centroid filtering (`cx_px > 0 & cy_px > 0`) runs before the patch mask under every policy. **Do not confuse positive centroid with full patch containment** — a positive centroid is necessary but not sufficient for `strict_no_padding`.
+
+#### filter_report.json (always written, always summarized)
+
+Written to `{output}/filter_report.json` **before any shard**. Summarize its contents in the user-facing reply after every extraction:
+
+- `source_table_key`, `source_shape_key` (resolved keys actually consumed)
+- `biological_policy_requested` / `_applied`, `patch_policy_requested` / `_applied`
+- `n_cells_source → n_after_biological_filter → n_after_positive_centroid → n_after_patch_policy → n_out`
+- `drop_counts_by_reason` keyed on `missing_nucleus_boundary`, `unaligned_with_shapes`, `non_positive_centroid`, `full_oob`, `need_pad`, `requested_subsample`
+- `warnings` — emit them verbatim in the reply
+
+#### Row-alignment invariants (must hold every run)
+
+- Within a sample: `manifest.parquet` row `i` ≡ `expression.h5ad` row `i`, `expr_row == sample_index`, `manifest.cell_id == adata_out.obs.cell_id`, `gene_row_index` resolves to the cell of the **resolved** table.
+- After Phase 2 compile: `compiled/manifest.parquet[i] == compiled/expression.h5ad[i] == global_idx=i`.
+
+These checks are asserted in `_validate(...)`. If you change the filter pipeline, re-run the unit + integration tests under `tests/test_filtering*.py` before declaring success.
 
 ### Pipeline Internals
 
