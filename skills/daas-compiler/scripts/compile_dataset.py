@@ -35,6 +35,15 @@ def parse_args():
     p.add_argument("--samples", default=None,
                    help="Comma-separated list of sample IDs to compile. "
                         "Default: all subdirs with manifest + h5ad.")
+    p.add_argument("--gene-order",
+                   choices=["first_sample", "sorted", "explicit"],
+                   default="first_sample",
+                   help="Gene ordering policy. first_sample=intersection ordered by "
+                        "first sample's var_names (default). sorted=lexicographic. "
+                        "explicit=use --gene-panel file.")
+    p.add_argument("--gene-panel", default=None,
+                   help="Path to JSON file with explicit ordered gene list. "
+                        "Required when --gene-order=explicit.")
     return p.parse_args()
 
 
@@ -50,7 +59,7 @@ def _flush_bundled_shard(shard_buf, shard_no, wds_dir):
     return tar_path
 
 
-def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_size):
+def _write_bundled_wds(compiled, global_manifest, combined, gene_panel, shard_size, gene_panel_sha: str = ""):
     """Write self-contained bundled shards directly into compiled/.
 
     Layout: per-sample subdirectories, no extra wds/ nesting.
@@ -58,12 +67,10 @@ def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_
         {compiled}/
             {sample_id}/
                 shard-NNNNNN.tar     jpg + expr.npz + json per cell
-            gene_panel.json          gene names in column order
             manifest.parquet         (already written by main; updated here
                                       with bundled shard_path column)
     """
-    gene_list = list(common_genes)
-    (compiled / "gene_panel.json").write_text(json.dumps(gene_list))
+    gene_list = list(gene_panel)
     n_genes = len(gene_list)
 
     X = combined.X
@@ -133,12 +140,13 @@ def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_
 
         global_key = f"{global_idx:09d}"
         meta = {
-            "global_idx": int(global_idx),
-            "sample_id":  sample_id,
-            "cell_id":    str(row["cell_id"]),
-            "sample_key": str(row["sample_key"]),
-            "n_genes":    n_genes,
-            "n_nonzero":  int(len(indices)),
+            "global_idx":        int(global_idx),
+            "sample_id":         sample_id,
+            "cell_id":           str(row["cell_id"]),
+            "sample_key":        str(row["sample_key"]),
+            "n_genes":           n_genes,
+            "n_nonzero":         int(len(indices)),
+            "gene_panel_sha256": gene_panel_sha,
         }
 
         state = sample_shard_state[sample_id]
@@ -213,24 +221,32 @@ def main():
     global_manifest.to_parquet(compiled / "manifest.parquet", index=False)
     print(f"      {len(global_manifest)} cells total")
 
-    # ── 2: Merge h5ad with gene intersection ──────────────────────────────────
+    # ── 2: Merge h5ad with gene order contract ────────────────────────────────
     print("[2/3] Merging expression h5ad …")
     adatas = [anndata.read_h5ad(d / "expression.h5ad") for d in sample_dirs]
+    sample_names = [d.name for d in sample_dirs]
 
-    common_genes = adatas[0].var_names
-    for a in adatas[1:]:
-        common_genes = common_genes.intersection(a.var_names)
+    explicit_genes = None
+    if args.gene_order == "explicit":
+        if args.gene_panel is None:
+            print("[compile] ERROR: --gene-panel path required with --gene-order=explicit")
+            sys.exit(1)
+        explicit_genes = json.loads(Path(args.gene_panel).read_text())
+
+    from daas.genes import resolve_gene_panel, validate_gene_panel, write_gene_panel, gene_panel_sha256
+    gene_panel = resolve_gene_panel(adatas, sample_names, args.gene_order,
+                                    explicit_gene_panel=explicit_genes)
     n_genes_before = adatas[0].n_vars
-    assert len(common_genes) > 0, \
-        "Gene intersection is empty — check that all samples share at least one gene"
-    print(f"      genes: {n_genes_before} → {len(common_genes)} "
-          f"(intersection across {len(adatas)} samples)")
+    print(f"      genes: {n_genes_before} → {len(gene_panel)} "
+          f"(policy={args.gene_order}, intersection across {len(adatas)} samples)")
 
-    combined = anndata.concat(
-        [a[:, common_genes] for a in adatas],
-        axis=0, merge="same"
-    )
+    sliced = [a[:, gene_panel].copy() for a in adatas]
+    validate_gene_panel(sliced, sample_names, gene_panel)
+
+    combined = anndata.concat(sliced, axis=0, merge="same")
     combined.obs_names_make_unique()
+    assert list(combined.var_names) == gene_panel, \
+        "combined var_names != gene_panel after concat"
 
     assert combined.n_obs == len(global_manifest), (
         f"h5ad rows ({combined.n_obs}) != manifest rows ({len(global_manifest)})"
@@ -238,6 +254,24 @@ def main():
 
     print("[3/3] Writing compiled h5ad …")
     combined.write_h5ad(compiled / "expression.h5ad")
+
+    # Always write gene panel and compile report
+    write_gene_panel(compiled, gene_panel)
+    sha256 = gene_panel_sha256(gene_panel)
+    compile_report = {
+        "gene_order_policy": args.gene_order,
+        "n_samples": len(sample_dirs),
+        "sample_ids": [d.name for d in sample_dirs],
+        "n_cells": int(combined.n_obs),
+        "n_genes": len(gene_panel),
+        "gene_panel_sha256": sha256,
+        "output_dir": str(compiled),
+        "elapsed_s": round(time.time() - t0, 2),
+    }
+    (compiled / "compile_report.json").write_text(
+        json.dumps(compile_report, indent=2)
+    )
+    print(f"      gene_panel.json + gene_panel.sha256 + compile_report.json → {compiled}/")
 
     elapsed = time.time() - t0
     n_shards = sum(1 for d in sample_dirs for _ in d.glob("shard-*.tar"))
@@ -247,7 +281,7 @@ def main():
     if args.bundle_wds:
         print("[bundle] Writing bundled shards …")
         _, n_bundled_shards, n_genes_bundle = _write_bundled_wds(
-            compiled, global_manifest, combined, common_genes, args.shard_size)
+            compiled, global_manifest, combined, gene_panel, args.shard_size, sha256)
         print(f"      → {compiled}/{{sample_id}}/shard-NNNNNN.tar "
               f"({n_bundled_shards} shards, "
               f"{len(global_manifest)} cells × {n_genes_bundle} genes)")
@@ -265,7 +299,7 @@ def main():
     print(f"""
 {'='*60}
   COMPILE COMPLETE — {len(sample_dirs)} samples, {len(global_manifest)} cells,
-                     {len(common_genes)} genes, {n_shards} source shards
+                     {len(gene_panel)} genes, {n_shards} source shards
 {'─'*60}
 from daas.dataset import CellPatchDataset
 from torch.utils.data import DataLoader
@@ -280,7 +314,7 @@ ds = CellPatchDataset(
 loader = DataLoader(ds, batch_size=256, shuffle=True, num_workers=8)
 batch  = next(iter(loader))
 # batch["image"].shape      → (256, 3, 224, 224)
-# batch["expression"].shape → (256, {len(common_genes)}){wds_info}
+# batch["expression"].shape → (256, {len(gene_panel)}){wds_info}
 {'='*60}
   Total time: {time.time() - t0:.1f}s
 """)
