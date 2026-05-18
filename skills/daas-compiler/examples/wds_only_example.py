@@ -35,15 +35,15 @@ from PIL import Image
 
 
 # ── 1. Configure paths ────────────────────────────────────────────────────────
-WDS_DIR = Path("/data/compiled/wds")  # ← change to your --bundle-wds output
+COMPILED_DIR = Path("/data/compiled")  # ← change to your --output dir
 
 
 # ── 2. Read the gene panel once ───────────────────────────────────────────────
 # Column order of indices in every .expr.npz matches this list.
-with open(WDS_DIR / "gene_panel.json") as f:
+with open(COMPILED_DIR / "gene_panel.json") as f:
     GENES = json.load(f)
 N_GENES = len(GENES)
-print(f"Loaded {N_GENES} genes from {WDS_DIR / 'gene_panel.json'}")
+print(f"Loaded {N_GENES} genes from {COMPILED_DIR / 'gene_panel.json'}")
 
 
 # ── 3. Custom decoders for our two non-standard members ───────────────────────
@@ -62,10 +62,10 @@ def decode_json(data: bytes) -> dict:
 
 
 # ── 4. Build the pipeline ─────────────────────────────────────────────────────
-# Shards live in per-sample subdirs: compiled/wds/{sample_id}/shard-NNNNNN.tar
+# Shards live in per-sample subdirs: compiled/{sample_id}/shard-NNNNNN.tar
 # Collect all shards across all sample subdirs (sorted for reproducibility).
-shards = sorted(WDS_DIR.rglob("shard-*.tar"))
-assert shards, f"No shards found under {WDS_DIR}"
+shards = sorted(COMPILED_DIR.rglob("shard-*.tar"))
+assert shards, f"No shards found under {COMPILED_DIR}"
 n_shards = len(shards)
 # Pass the full list of shard paths directly — WebDataset accepts a list.
 url_pattern = [str(s) for s in shards]

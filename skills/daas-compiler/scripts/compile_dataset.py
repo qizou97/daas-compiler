@@ -48,24 +48,19 @@ def _flush_bundled_shard(shard_buf, shard_no, wds_dir):
 
 
 def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_size):
-    """Write self-contained {compiled}/wds/ — image + sparse expr per cell.
+    """Write self-contained bundled shards directly into compiled/.
 
-    Layout: per-sample subdirectories so each shard contains cells from
-    exactly one sample. This mirrors the per-sample dir layout, keeps
-    sample-id filtering free (just pick the matching subdirs), and never
-    requires reading partial shards when a user selects a sample subset.
+    Layout: per-sample subdirectories, no extra wds/ nesting.
 
-        {compiled}/wds/
+        {compiled}/
             {sample_id}/
                 shard-NNNNNN.tar     jpg + expr.npz + json per cell
-            manifest.parquet         global manifest (covers all samples)
             gene_panel.json          gene names in column order
+            manifest.parquet         (already written by main; updated here
+                                      with bundled shard_path column)
     """
-    wds_dir = compiled / "wds"
-    wds_dir.mkdir(exist_ok=True)
-
     gene_list = list(common_genes)
-    (wds_dir / "gene_panel.json").write_text(json.dumps(gene_list))
+    (compiled / "gene_panel.json").write_text(json.dumps(gene_list))
     n_genes = len(gene_list)
 
     X = combined.X
@@ -88,7 +83,7 @@ def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_
         state = sample_shard_state[sample_id]
         if not state["buf"]:
             return
-        sub_dir = wds_dir / sample_id
+        sub_dir = compiled / sample_id
         sub_dir.mkdir(exist_ok=True)
         tar_path = _flush_bundled_shard(state["buf"], state["shard_no"], sub_dir)
         # Back-patch shard_path for the rows that just flushed.
@@ -176,8 +171,8 @@ def _write_bundled_wds(compiled, global_manifest, combined, common_genes, shard_
     # Preserve global_idx order even if multi-sample interleaving in source
     # caused per-sample state to flush at different times.
     bundled_manifest = bundled_manifest.sort_values("global_idx").reset_index(drop=True)
-    bundled_manifest.to_parquet(wds_dir / "manifest.parquet", index=False)
-    return wds_dir, total_shards, n_genes
+    bundled_manifest.to_parquet(compiled / "bundled_manifest.parquet", index=False)
+    return compiled, total_shards, n_genes
 
 
 def main():
@@ -236,20 +231,21 @@ def main():
     # ── Optional: bundled WebDataset ──────────────────────────────────────────
     wds_info = ""
     if args.bundle_wds:
-        print("[bundle] Writing self-contained WebDataset …")
-        wds_dir, n_bundled_shards, n_genes_bundle = _write_bundled_wds(
+        print("[bundle] Writing bundled shards …")
+        _, n_bundled_shards, n_genes_bundle = _write_bundled_wds(
             compiled, global_manifest, combined, common_genes, args.shard_size)
-        print(f"      → {wds_dir} ({n_bundled_shards} shards, "
+        print(f"      → {compiled}/{{sample_id}}/shard-NNNNNN.tar "
+              f"({n_bundled_shards} shards, "
               f"{len(global_manifest)} cells × {n_genes_bundle} genes)")
         wds_info = f"""
 
-  [bundled WDS] → {wds_dir}
+  [bundled] → {compiled}/{{sample_id}}/shard-NNNNNN.tar
   No mmap needed at training time. Each tar entry contains
   {{key}}.jpg + {{key}}.expr.npz + {{key}}.json. Genes list in
-  {wds_dir}/gene_panel.json (n_genes={n_genes_bundle}).
+  {compiled}/gene_panel.json (n_genes={n_genes_bundle}).
 
   from daas.dataset import BundledCellPatchDataset
-  ds = BundledCellPatchDataset(wds_dir="{wds_dir}",
+  ds = BundledCellPatchDataset(compiled_dir="{compiled}",
                                 sample_ids=train_samples)"""
 
     print(f"""

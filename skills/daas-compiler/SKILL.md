@@ -59,11 +59,10 @@ per-sample/
 compiled/
   manifest.parquet        global_idx → image location + expr location
   expression.h5ad         gene intersection across all samples
-  wds/                    [optional: --bundle-wds] self-contained WebDataset
-    {sample_id}/
-      shard-NNNNNN.tar    jpg + expr.npz + json per cell (one sample only)
-    manifest.parquet      cell_id, sample_id, shard_path, global_idx
-    gene_panel.json       gene names matching .expr.npz indices
+  {sample_id}/            [optional: --bundle-wds] bundled shards, one sample only
+    shard-NNNNNN.tar      jpg + expr.npz + json per cell
+  gene_panel.json         [--bundle-wds] gene names matching .expr.npz indices
+  bundled_manifest.parquet  [--bundle-wds] cell_id, sample_id, shard_path, global_idx
         │
         │  [Phase 3: train]
         ▼
@@ -357,7 +356,7 @@ python3 "${SKILL_DIR}/scripts/compile_dataset.py" \
 
 Scans all subdirs of `--per-sample-dir` that have **both** `manifest.parquet` and `expression.h5ad`. Skips others (e.g. smoke test dirs).
 
-**`--bundle-wds`** also writes a self-contained WebDataset under `{output}/wds/` with **per-sample subdirectories**: each `{sample_id}/shard-NNNNNN.tar` contains only cells from that sample (jpg + sparse expr.npz + json per cell). Shards never mix samples. Training from `wds/` does not require mmap or the compiled h5ad. The gene panel is in `wds/gene_panel.json`. The bundled manifest has no `tar_offset`/`jpg_size` fields — it's only used for sample-id filtering and shard discovery.
+**`--bundle-wds`** writes bundled shards directly under `{output}/{sample_id}/shard-NNNNNN.tar` — no extra `wds/` subdirectory. Each shard contains only cells from that sample (jpg + sparse expr.npz + json per cell). Shards never mix samples. Training does not require mmap or the compiled h5ad. The gene panel is in `{output}/gene_panel.json`; the bundled manifest (with shard_path, no tar_offset) is in `{output}/bundled_manifest.parquet`.
 
 ### Implementation
 
@@ -448,10 +447,10 @@ When `--bundle-wds` is set on compile, every cell's image + sparse expression is
 from daas.dataset import BundledCellPatchDataset
 
 ds = BundledCellPatchDataset(
-    wds_dir         = "compiled/wds",
-    sample_ids      = train_samples,    # None = all samples
-    transform       = T.Compose([T.ToTensor()]),
-    dense_expression = True,            # False → (indices, values, n_genes)
+    compiled_dir     = "compiled",       # same dir as CellPatchDataset
+    sample_ids       = train_samples,    # None = all samples
+    transform        = T.Compose([T.ToTensor()]),
+    dense_expression = True,             # False → (indices, values, n_genes)
 )
 loader = DataLoader(ds, batch_size=256, shuffle=True, num_workers=8)
 batch  = next(iter(loader))
@@ -465,7 +464,7 @@ batch  = next(iter(loader))
 | Expression source | compiled `expression.h5ad` indexed by `global_idx` | `{key}.expr.npz` inside the same tar entry |
 | Speed (per-cell read) | very fast (zero-copy mmap) | slightly slower (~2×) but no mmap RAM growth |
 | Total memory at scale | mmap pages may grow per worker | bounded; OS page cache only |
-| Files needed at training time | manifest.parquet + expression.h5ad + per-sample shards | `wds/` only — fully self-contained |
+| Files needed at training time | manifest.parquet + expression.h5ad + per-sample shards | compiled/ only — fully self-contained |
 
 Pick `BundledCellPatchDataset` when training infra disallows large mmap working sets, or when shipping a single tarballed dataset to a different machine.
 
@@ -492,7 +491,7 @@ Sketch of the pipeline (full file in `examples/wds_only_example.py`):
 
 ```python
 import json, io, numpy as np, webdataset as wds
-N_GENES = len(json.load(open("compiled/wds/gene_panel.json")))
+N_GENES = len(json.load(open("compiled/gene_panel.json")))
 
 def decode_expr_npz(data):
     npz = np.load(io.BytesIO(data))
@@ -500,9 +499,9 @@ def decode_expr_npz(data):
     expr[npz["indices"]] = npz["values"]
     return expr
 
-# Shards are in per-sample subdirs: compiled/wds/{sample_id}/shard-NNNNNN.tar
+# Shards are in per-sample subdirs: compiled/{sample_id}/shard-NNNNNN.tar
 # Pass the full sorted list — WebDataset accepts a list of paths.
-shards = sorted(Path("compiled/wds").rglob("shard-*.tar"))
+shards = sorted(Path("compiled").rglob("shard-*.tar"))
 ds = (
     wds.WebDataset([str(s) for s in shards])
     .decode("pil",

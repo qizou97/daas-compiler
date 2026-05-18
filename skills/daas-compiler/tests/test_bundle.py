@@ -47,19 +47,17 @@ def test_bundle_wds_produces_expected_files(synthetic_sample, tmp_path):
     )
     assert result.returncode == 0, result.stderr
 
-    wds = compiled / "wds"
-    assert wds.exists()
-    assert (wds / "manifest.parquet").exists()
-    assert (wds / "gene_panel.json").exists()
+    assert (compiled / "bundled_manifest.parquet").exists()
+    assert (compiled / "gene_panel.json").exists()
 
-    # Per-sample subdirs, each with at least one shard
-    sample_dirs = [d for d in wds.iterdir() if d.is_dir()]
+    # Per-sample subdirs directly under compiled/, each with at least one shard
+    sample_dirs = [d for d in compiled.iterdir() if d.is_dir()]
     assert {d.name for d in sample_dirs} == {synthetic_sample["sample_id"],
                                                "TEST_002"}
     for sd in sample_dirs:
         assert sorted(sd.glob("shard-*.tar")), f"No shards in {sd}"
 
-    gene_panel = json.loads((wds / "gene_panel.json").read_text())
+    gene_panel = json.loads((compiled / "gene_panel.json").read_text())
     assert isinstance(gene_panel, list)
     assert len(gene_panel) == synthetic_sample["n_genes"]
 
@@ -78,8 +76,7 @@ def test_bundle_wds_shards_never_mix_samples(synthetic_sample, tmp_path):
         check=True, capture_output=True, text=True
     )
 
-    wds = compiled / "wds"
-    for shard in wds.rglob("shard-*.tar"):
+    for shard in compiled.rglob("shard-*.tar"):
         sample_ids_in_shard = set()
         with tarfile.open(shard, "r") as tf:
             for m in tf.getmembers():
@@ -105,7 +102,7 @@ def test_bundle_wds_tar_members(synthetic_sample, tmp_path):
         check=True, capture_output=True, text=True
     )
 
-    shards = sorted((compiled / "wds").rglob("shard-*.tar"))
+    shards = sorted(compiled.rglob("shard-*.tar"))
     assert shards
 
     with tarfile.open(shards[0], "r") as tf:
@@ -132,7 +129,7 @@ def test_bundled_dataset_returns_image_and_expression(synthetic_sample, tmp_path
     )
 
     from daas.dataset import BundledCellPatchDataset
-    ds = BundledCellPatchDataset(wds_dir=compiled / "wds")
+    ds = BundledCellPatchDataset(compiled_dir=compiled)
 
     assert len(ds) == synthetic_sample["n_cells"] * 2
 
@@ -162,7 +159,7 @@ def test_bundled_dataset_sparse_mode(synthetic_sample, tmp_path):
     )
 
     from daas.dataset import BundledCellPatchDataset
-    ds = BundledCellPatchDataset(wds_dir=compiled / "wds",
+    ds = BundledCellPatchDataset(compiled_dir=compiled,
                                   dense_expression=False)
     indices, values, n_genes = ds[0]["expression"]
     assert indices.dtype == np.int32
@@ -184,7 +181,7 @@ def test_bundled_dataset_sample_ids_filter(synthetic_sample, tmp_path):
     )
 
     from daas.dataset import BundledCellPatchDataset
-    ds = BundledCellPatchDataset(wds_dir=compiled / "wds",
+    ds = BundledCellPatchDataset(compiled_dir=compiled,
                                   sample_ids=["TEST_002"])
     assert len(ds) == synthetic_sample["n_cells"]
     assert ds[0]["sample_id"] == "TEST_002"
@@ -204,7 +201,7 @@ def test_bundled_expression_matches_compiled_h5ad(synthetic_sample, tmp_path):
     )
 
     from daas.dataset import BundledCellPatchDataset
-    ds = BundledCellPatchDataset(wds_dir=compiled / "wds")
+    ds = BundledCellPatchDataset(compiled_dir=compiled)
 
     h5ad = anndata.read_h5ad(compiled / "expression.h5ad")
 

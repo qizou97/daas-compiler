@@ -121,24 +121,21 @@ class BundledCellPatchDataset(TorchDataset):
       - {key}.expr.npz  — sparse expression: indices (int32) + values (float32)
       - {key}.json      — metadata (cell_id, sample_id, n_genes, …)
 
-    Compared to CellPatchDataset:
-      - No mmap (uses tarfile.extractfile per-cell)
-      - No external h5ad — expression travels with the patch
-      - Sample filtering via the bundled manifest.parquet
-      - Slightly slower per-cell read (~2× vs mmap), but no per-worker
-        mmap memory accumulation
+    Shards live at {compiled_dir}/{sample_id}/shard-NNNNNN.tar — no wds/
+    subdirectory. gene_panel.json and bundled_manifest.parquet are in
+    compiled_dir alongside expression.h5ad.
     """
 
-    def __init__(self, wds_dir, sample_ids=None, transform=None,
+    def __init__(self, compiled_dir, sample_ids=None, transform=None,
                  dense_expression: bool = True):
-        wds_dir = Path(wds_dir)
-        self.wds_dir = wds_dir
-        self.manifest = pd.read_parquet(wds_dir / "manifest.parquet",
+        compiled_dir = Path(compiled_dir)
+        self.compiled_dir = compiled_dir
+        self.manifest = pd.read_parquet(compiled_dir / "bundled_manifest.parquet",
                                         dtype_backend="numpy_nullable")
         self.manifest["sample_key"] = self.manifest["sample_key"].astype(str)
         self.manifest["global_key"] = self.manifest["global_key"].astype(str)
 
-        with open(wds_dir / "gene_panel.json") as f:
+        with open(compiled_dir / "gene_panel.json") as f:
             self.genes = json.load(f)
         self.n_genes = len(self.genes)
 
