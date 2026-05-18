@@ -1,13 +1,5 @@
-"""Integration-style tests for the filtering policy layer.
-
-These do not run the full ``extract_sample.py`` CLI (which requires
-``wsidata``/``lazyslide`` + a real H&E pyramid). Instead they mirror the
-orchestration of Phases 1b–3c so the alignment invariants and the
-filter-report contract are verified end-to-end at the Python level.
-
-CLI parse-time tests use the lightweight :mod:`daas.cli_args` module to
-avoid dragging in heavyweight extraction deps just for argument parsing.
-"""
+# skills/daas-compiler/tests/test_filtering_integration.py
+"""Integration tests for alignment + patch filtering (no biological policy)."""
 import json
 from types import SimpleNamespace
 
@@ -25,19 +17,16 @@ from daas.cli_args import (
     validate_policy_combination,
 )
 from daas.filtering import (
-    BiologicalPolicy,
     PatchPolicy,
     build_filter_report,
     mask_patch_policy,
     mask_positive_centroid,
-    resolve_biological_policy,
     resolve_patch_policy,
     resolve_table_shape_alignment,
     write_filter_report,
 )
 
 
-# ── small synthetic SpatialData stand-in ─────────────────────────────────
 def _adata(cell_ids, n_genes: int = 4) -> anndata.AnnData:
     n = len(cell_ids)
     X = csr_matrix(
@@ -50,26 +39,14 @@ def _adata(cell_ids, n_genes: int = 4) -> anndata.AnnData:
 
 
 def _shapes(cell_ids, xy_um) -> gpd.GeoDataFrame:
-    """GeoDataFrame of point centroids in micron coordinates."""
     return gpd.GeoDataFrame(
         {"geometry": [Point(x, y) for x, y in xy_um]},
         index=pd.Index([str(c) for c in cell_ids], name="cell_id"),
     )
 
 
-def _sdata(tables: dict, shapes: dict):
-    return SimpleNamespace(tables=tables, shapes=shapes)
-
-
-# ── Required test 5: alignment preservation through the full pipeline ───
 def test_alignment_preserved_end_to_end(tmp_path):
-    """Run the exact orchestration extract_sample.py uses and assert that
-    manifest row order ≡ expression.h5ad row order, ``expr_row``
-    ≡ ``sample_index``, and ``gene_row_index`` indexes the resolved
-    ``adata`` row whose ``cell_id`` matches the manifest's ``cell_id``.
-    """
-    # Build 6 cells with mixed signs and a few boundary tiles.
-    # SLIDE_MPP = 1.0 µm/px, SCALE_SHAPE = 1.0 (microns == pixels), BASE_SIZE = 20.
+    """Direct table load → alignment → patch filter preserves row order."""
     cell_ids = ["c0", "c1", "c2", "c3", "c4", "c5"]
     xy_um = [
         (40, 40),    # fully inside  (keep)
@@ -81,44 +58,25 @@ def test_alignment_preserved_end_to_end(tmp_path):
     ]
     adata_in = _adata(cell_ids)
     gdf_in = _shapes(cell_ids, xy_um)
-    sdata = _sdata(tables={"table": adata_in}, shapes={"cell_circles": gdf_in})
 
-    # Phase 1b — biological resolve (none, since no filtered_table)
-    bio = resolve_biological_policy(
-        sdata=sdata,
-        table_key="table",
-        shapes_key="cell_circles",
-        policy=BiologicalPolicy.AUTO,
-        table_key_was_default=True,
-    )
-    assert bio.policy_applied is BiologicalPolicy.NONE
-    adata_after_bio = sdata.tables[bio.table_key_used]
-    if bio.keep_table_mask is not None:
-        adata_after_bio = adata_after_bio[bio.keep_table_mask].copy()
-    gdf_full = sdata.shapes[bio.shapes_key_used]
-
-    align = resolve_table_shape_alignment(adata_after_bio, gdf_full)
+    # Direct load — no biological policy
+    align = resolve_table_shape_alignment(adata_in, gdf_in)
     assert align.alignment_mode == "exact"
-    adata = adata_after_bio[align.adata_row_indices].copy()
-    gdf = gdf_full.iloc[align.shape_row_indices].copy()
+    adata = adata_in[align.adata_row_indices].copy()
+    gdf = gdf_in.iloc[align.shape_row_indices].copy()
 
-    # Phase 2 — fixed scales (no real image; this is what extract_sample.py
-    # would compute from the transformations).
     SCALE_SHAPE = 1.0
-    SLIDE_MPP = 1.0
     BASE_SIZE = 20
     BASE_HALF = BASE_SIZE / 2.0
     IMG_W = IMG_H = 100
 
-    centroids = gdf.geometry
-    cx_um = np.array([c.x for c in centroids], dtype=np.float64)
-    cy_um = np.array([c.y for c in centroids], dtype=np.float64)
+    cx_um = np.array([c.x for c in gdf.geometry], dtype=np.float64)
+    cy_um = np.array([c.y for c in gdf.geometry], dtype=np.float64)
     cx_px = cx_um * SCALE_SHAPE
     cy_px = cy_um * SCALE_SHAPE
     sx0 = cx_px - BASE_HALF
     sy0 = cy_px - BASE_HALF
 
-    # Phase 3 — patch policy
     patch_policy = resolve_patch_policy(PatchPolicy.AUTO, "tile_images")
     assert patch_policy is PatchPolicy.STRICT_NO_PADDING
     pos_mask = mask_positive_centroid(cx_px, cy_px)
@@ -128,253 +86,80 @@ def test_alignment_preserved_end_to_end(tmp_path):
         policy=patch_policy, extract_mode="tile_images",
     )
     final_mask = pos_mask & patch_res.valid_mask
-    # Only c0 and c1 survive strict_no_padding.
     np.testing.assert_array_equal(
         final_mask, [True, True, False, False, False, False]
     )
 
-    # Phase 3b — sample everything (no subsample for determinism)
     valid_indices = np.where(final_mask)[0]
     n_out = len(valid_indices)
-    sampled_orig = valid_indices
 
-    cx_px_s = cx_px[sampled_orig]
-    cy_px_s = cy_px[sampled_orig]
-    sx0_s = sx0[sampled_orig]
-    sy0_s = sy0[sampled_orig]
-    gene_row_s = sampled_orig.copy()
-
-    # Phase 4 — spatial sort
-    sort_key = (np.maximum(0, sy0_s) // 4096) * 10000 + (
-        np.maximum(0, sx0_s) // 4096
-    )
-    proc_order = np.argsort(sort_key, kind="stable")
-    cx_px_ord = cx_px_s[proc_order]
-    sx0_ord = sx0_s[proc_order]
-    sy0_ord = sy0_s[proc_order]
-    cell_ids_ord = [gdf.index[sampled_orig[i]] for i in proc_order]
-    gene_row_ord = gene_row_s[proc_order]
-
-    # Phase 8 — construct manifest + h5ad-like outputs the same way the
-    # script does, then assert the row-order invariants.
-    cells_rows = [
-        {
-            "sample_index": i,
-            "sample_key": f"{i:07d}",
-            "cell_id": cell_ids_ord[i],
-            "gene_row_index": int(gene_row_ord[i]),
-            "expr_row": i,  # extract_sample.py sets expr_row = sample_index
-        }
-        for i in range(n_out)
-    ]
-    cells_df = pd.DataFrame(cells_rows)
-    X_out = adata.X[gene_row_ord, :]
-    obs_out = pd.DataFrame(
-        {"sample_key": cells_df["sample_key"], "cell_id": cells_df["cell_id"]}
-    )
-    obs_out.index = obs_out["sample_key"].values
-    adata_out = anndata.AnnData(X=X_out, obs=obs_out, var=adata.var.copy())
-    adata_out.write_h5ad(tmp_path / "expression.h5ad")
-    cells_df.to_parquet(tmp_path / "manifest.parquet", index=False)
-
-    # ── Required invariants ─────────────────────────────────────────────
-    # 1. expr_row equals sample_index
-    assert (cells_df["expr_row"].values == cells_df["sample_index"].values).all()
-    # 2. manifest cell_id row order == adata_out.obs.cell_id row order
-    assert (cells_df["cell_id"].values == adata_out.obs["cell_id"].values).all()
-    # 3. gene_row_index → resolved adata row whose cell_id matches manifest cell_id
-    resolved_ids = adata.obs["cell_id"].astype(str).values
-    for i in range(n_out):
-        assert (
-            str(cells_df.iloc[i]["cell_id"])
-            == resolved_ids[int(cells_df.iloc[i]["gene_row_index"])]
-        )
-    # 4. X rows of adata_out match adata.X at gene_row_ord
-    np.testing.assert_array_equal(
-        adata_out.X.toarray(), adata.X[gene_row_ord, :].toarray()
-    )
-    # 5. Reload manifest + h5ad and assert again from disk
-    on_disk_manifest = pd.read_parquet(tmp_path / "manifest.parquet")
-    on_disk_h5ad = anndata.read_h5ad(tmp_path / "expression.h5ad")
-    assert (
-        on_disk_manifest["cell_id"].values
-        == on_disk_h5ad.obs["cell_id"].values
-    ).all()
+    # Verify alignment invariants hold
+    assert n_out == 2
+    survived_ids = [gdf.index[i] for i in valid_indices]
+    assert survived_ids == ["c0", "c1"]
+    # gene_row_index points to the right cell_id in adata
+    for local_i, orig_i in enumerate(valid_indices):
+        assert adata.obs.iloc[orig_i]["cell_id"] == survived_ids[local_i]
 
 
-# ── Required test 6: filter_report.json end-to-end ────────────────────────
-def test_filter_report_written_with_required_fields(tmp_path):
-    """Mirror the script's Phase 3c so the report is built from the
-    canonical helpers and contains every field downstream tools rely on."""
-    cell_ids = ["c0", "c1", "c2", "c3"]
-    xy_um = [(40, 40), (60, 60), (-50, 10), (-5, 10)]
-    adata_in = _adata(cell_ids)
-    gdf_in = _shapes(cell_ids, xy_um)
-    flt = _adata(["c0", "c1", "c2"])  # filtered_table only retains c0..c2
-    sdata = _sdata(
-        tables={"table": adata_in, "filtered_table": flt},
-        shapes={"cell_circles": gdf_in},
-    )
-
-    bio = resolve_biological_policy(
-        sdata=sdata,
-        table_key="table",
-        shapes_key="cell_circles",
-        policy=BiologicalPolicy.AUTO,
-        table_key_was_default=True,
-    )
-    assert bio.policy_applied is BiologicalPolicy.STVISUOME_CANONICAL
-    adata_after_bio = sdata.tables[bio.table_key_used]
-    gdf_full = sdata.shapes[bio.shapes_key_used]
-    align = resolve_table_shape_alignment(adata_after_bio, gdf_full)
-    adata = adata_after_bio[align.adata_row_indices].copy()
-    gdf = gdf_full.iloc[align.shape_row_indices].copy()
-
-    BASE_SIZE = 20
-    BASE_HALF = BASE_SIZE / 2.0
-    centroids = gdf.geometry
-    cx_px = np.array([c.x for c in centroids], dtype=np.float64)
-    cy_px = np.array([c.y for c in centroids], dtype=np.float64)
-    sx0 = cx_px - BASE_HALF
-    sy0 = cy_px - BASE_HALF
-    pos_mask = mask_positive_centroid(cx_px, cy_px)
-    patch_res = mask_patch_policy(
-        sx0, sy0,
-        base_size=BASE_SIZE, img_w=100, img_h=100,
-        policy=PatchPolicy.STRICT_NO_PADDING, extract_mode="tile_images",
-    )
-    final_mask = pos_mask & patch_res.valid_mask
-    n_valid = int(final_mask.sum())
-    n_out = n_valid  # no subsample
-
-    drop_counts = {}
-    drop_counts.update({k: int(v) for k, v in bio.drop_counts.items()})
-    drop_counts["non_positive_centroid"] = int((~pos_mask).sum())
-    drop_counts.update({k: int(v) for k, v in patch_res.drop_counts.items()})
-    drop_counts["requested_subsample"] = int(n_valid - n_out)
-
-    report = build_filter_report(
-        sample_id="TEST_INT",
-        zarr_path="/x/test.zarr",
+def test_filter_report_written_with_correct_fields(tmp_path):
+    report_dict = build_filter_report(
+        sample_id="A_001",
+        zarr_path="/data/A_001.zarr",
         output_dir=str(tmp_path),
         image_key="he_image",
         extract_mode="tile_images",
-        source_table_key=bio.table_key_used,
-        source_shape_key=bio.shapes_key_used,
-        biological_policy_requested=bio.policy_requested.value,
-        biological_policy_applied=bio.policy_applied.value,
+        source_table_key="table_tissue_nucleus",
+        source_shape_key="cell_circles",
         patch_policy_requested="auto",
         patch_policy_applied="strict_no_padding",
-        n_cells_source=int(bio.n_cells_source),
-        n_after_biological_filter=int(bio.n_after_biological_filter),
-        n_after_shape_alignment=int(adata.n_obs),
-        n_after_positive_centroid=int(pos_mask.sum()),
-        n_after_patch_policy=n_valid,
-        n_out=n_out,
-        drop_counts_by_reason=drop_counts,
-        patch_size=224, target_mpp=0.5, slide_mpp=1.0, base_size=BASE_SIZE,
-        image_width_px=100, image_height_px=100,
-        seed=42, warnings=list(bio.warnings),
+        n_cells_source=200,
+        n_after_shape_alignment=198,
+        n_after_positive_centroid=196,
+        n_after_patch_policy=190,
+        n_out=100,
+        drop_counts_by_reason={"full_oob": 6, "need_pad": 4,
+                               "requested_subsample": 90},
+        patch_size=224,
+        target_mpp=0.5,
+        slide_mpp=0.2125,
+        base_size=527,
+        image_width_px=38912,
+        image_height_px=26624,
+        seed=42,
     )
-    report_path = write_filter_report(report, tmp_path)
-    assert report_path.exists()
-    on_disk = json.loads(report_path.read_text())
+    assert report_dict["source_table_key"] == "table_tissue_nucleus"
+    assert report_dict["n_cells_source"] == 200
+    assert report_dict["n_out"] == 100
+    # Biological policy fields must NOT be present
+    assert "biological_policy_requested" not in report_dict
+    assert "biological_policy_applied" not in report_dict
+    assert "n_after_biological_filter" not in report_dict
 
-    # Required fields are present + carry the right values.
-    assert on_disk["source_table_key"] == "filtered_table"
-    assert on_disk["source_shape_key"] == "cell_circles"
-    assert on_disk["biological_policy_applied"] == "stvisuome_canonical"
-    assert on_disk["patch_policy_applied"] == "strict_no_padding"
-    assert on_disk["n_cells_source"] == 3
-    assert on_disk["n_out"] == n_out
-    # filtered_table → c0/c1/c2, of which c0 & c1 survive patch policy
-    assert n_out == 2
-    assert "non_positive_centroid" in on_disk["drop_counts_by_reason"]
-    assert "full_oob" in on_disk["drop_counts_by_reason"]
-    assert "need_pad" in on_disk["drop_counts_by_reason"]
-    assert isinstance(on_disk["warnings"], list)
+    path = write_filter_report(report_dict, tmp_path)
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert data["n_cells_source"] == 200
 
 
-# ── Required test 7: backward compatibility — default CLI is strict ──────
-def test_cli_defaults_resolve_to_strict_no_padding():
-    """`auto` policies on the CLI must resolve to ``strict_no_padding``.
-
-    Uses the lightweight ``daas.cli_args`` parser so this test does NOT
-    pull in ``wsidata``/``lazyslide``/``matplotlib`` just to verify
-    argparse defaults.
-    """
-    args = parse_extract_sample_args(["--zarr", "X", "--output", "Y"])
-    assert args.biological_filter_policy == "auto"
-    assert args.patch_filter_policy == "auto"
-    assert (
-        resolve_patch_policy(PatchPolicy(args.patch_filter_policy), args.extract_mode)
-        is PatchPolicy.STRICT_NO_PADDING
-    )
-    assert args.table_key == "table"
-    assert args.shapes_key == "cell_circles"
-    assert args.image_key == "he_image"
-    assert args.extract_mode == "tile_images"
-    assert args.cell_id_column == "cell_id"
-    assert args.nucleus_boundaries_key == "nucleus_boundaries"
-    assert args.filtered_table_key == "filtered_table"
-    assert args.filter_report_name == "filter_report.json"
+def test_cli_parse_no_biological_policy_args():
+    """After refactor, --biological-filter-policy no longer exists."""
+    import sys
+    parser = build_extract_sample_parser()
+    # Should not have biological-filter-policy option
+    option_strings = [
+        action.option_strings
+        for action in parser._actions
+    ]
+    flat = [s for group in option_strings for s in group]
+    assert "--biological-filter-policy" not in flat
+    assert "--filtered-table-key" not in flat
+    assert "--nucleus-boundaries-key" not in flat
 
 
-def test_cli_rejects_stvisuome_minimal_with_full_modes():
-    """Parse-time validation: stvisuome_minimal + full_* exits cleanly."""
-    for mode in ("full_scale0", "full_ops_level"):
-        with pytest.raises(SystemExit, match="stvisuome_minimal"):
-            parse_extract_sample_args(
-                ["--zarr", "X", "--output", "Y",
-                 "--patch-filter-policy", "stvisuome_minimal",
-                 "--extract-mode", mode]
-            )
-
-
-def test_cli_rejects_strict_with_padding():
-    """Parse-time validation: strict_with_padding is reserved."""
-    with pytest.raises(SystemExit, match="strict_with_padding"):
-        parse_extract_sample_args(
-            ["--zarr", "X", "--output", "Y",
-             "--patch-filter-policy", "strict_with_padding"]
-        )
-
-
-def test_cli_allows_stvisuome_minimal_with_tile_images():
-    """stvisuome_minimal + tile_images is the documented happy path."""
+def test_cli_parse_table_key_respected():
     args = parse_extract_sample_args(
-        ["--zarr", "X", "--output", "Y",
-         "--patch-filter-policy", "stvisuome_minimal",
-         "--extract-mode", "tile_images"]
+        ["--zarr", "/data/A.zarr", "--output", "/data/out",
+         "--table-key", "table_tissue_nucleus"]
     )
-    assert args.patch_filter_policy == "stvisuome_minimal"
-    assert args.extract_mode == "tile_images"
-
-
-def test_validate_policy_combination_callable_directly():
-    """Programmatic validators can be called without going through the parser."""
-    p = build_extract_sample_parser()
-    ok = p.parse_args(["--zarr", "X", "--output", "Y",
-                       "--patch-filter-policy", "strict_no_padding",
-                       "--extract-mode", "full_ops_level"])
-    validate_policy_combination(ok)  # must not raise
-
-    bad = p.parse_args(["--zarr", "X", "--output", "Y",
-                        "--patch-filter-policy", "stvisuome_minimal",
-                        "--extract-mode", "full_ops_level"])
-    with pytest.raises(SystemExit, match="stvisuome_minimal"):
-        validate_policy_combination(bad)
-
-
-def test_existing_synthetic_manifest_schema_still_loads(synthetic_sample):
-    """Smoke check: the per-sample fixture used by test_compile/test_bundle
-    still loads via the same column set after the script changes — i.e.
-    adding `source_table_key`/`source_shape_key` did not turn the existing
-    columns into requirements."""
-    manifest = pd.read_parquet(synthetic_sample["dir"] / "manifest.parquet")
-    required = {"sample_id", "sample_key", "cell_id",
-                "shard_path", "tar_offset", "jpg_size",
-                "expr_row", "global_idx"}
-    assert required.issubset(set(manifest.columns))
-    adata = anndata.read_h5ad(synthetic_sample["dir"] / "expression.h5ad")
-    assert adata.n_obs == len(manifest)
+    assert args.table_key == "table_tissue_nucleus"

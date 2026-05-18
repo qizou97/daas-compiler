@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 from typing import Optional, Sequence
 
-from daas.filtering import BiologicalPolicy, PatchPolicy
+from daas.filtering import PatchPolicy
 
 
 DEFAULT_TABLE_KEY = "table"
@@ -39,12 +39,6 @@ def build_extract_sample_parser() -> argparse.ArgumentParser:
                    help="Patch extraction strategy: tile_images (default, "
                         "low mem), full_scale0 (fast, ~1.6 GB), "
                         "full_ops_level (fastest, ~0.4 GB)")
-    p.add_argument("--biological-filter-policy",
-                   default=BiologicalPolicy.AUTO.value,
-                   choices=[p.value for p in BiologicalPolicy],
-                   help="Layer 1: cell-level filtering policy. 'auto' uses "
-                        "filtered_table when present and --table-key was not "
-                        "explicitly set; otherwise falls back to 'none'.")
     p.add_argument("--patch-filter-policy",
                    default=PatchPolicy.AUTO.value,
                    choices=[p.value for p in PatchPolicy],
@@ -54,8 +48,6 @@ def build_extract_sample_parser() -> argparse.ArgumentParser:
                         "and is only valid with --extract-mode tile_images. "
                         "'strict_with_padding' is reserved (raises).")
     p.add_argument("--cell-id-column",         default="cell_id")
-    p.add_argument("--nucleus-boundaries-key", default="nucleus_boundaries")
-    p.add_argument("--filtered-table-key",     default="filtered_table")
     p.add_argument("--filter-report-name",     default="filter_report.json")
     return p
 

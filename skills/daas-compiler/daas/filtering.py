@@ -2,10 +2,9 @@
 
 Two layered policies:
 
-* **Layer 1 — biological / canonical cell filtering.** Selects which table
-  and shape layer to read from the canonical SpatialData, and optionally
-  drops table rows whose cell_id does not appear in a reference shape layer
-  (e.g. ``nucleus_boundaries``).
+* **Layer 1 — table/shape alignment.** Validates that the table and shape
+  layer are aligned (exact row-order or by intersection), and selects which
+  rows to keep.
 * **Layer 2 — patch-validity filtering.** Drops cells whose tile would fall
   off the slide or require padding the producer cannot guarantee.
 
@@ -27,13 +26,6 @@ import pandas as pd
 
 
 # ── Enums ─────────────────────────────────────────────────────────────────
-class BiologicalPolicy(str, Enum):
-    AUTO = "auto"
-    NONE = "none"
-    STVISUOME_CANONICAL = "stvisuome_canonical"
-    STVISUOME_NUCLEUS_BOUNDARY = "stvisuome_nucleus_boundary"
-
-
 class PatchPolicy(str, Enum):
     AUTO = "auto"
     STRICT_NO_PADDING = "strict_no_padding"
@@ -59,27 +51,6 @@ class PatchMaskResult:
     need_pad_mask: np.ndarray
     drop_counts: dict
     policy: str
-
-
-@dataclass
-class BiologicalResolution:
-    table_key_used: str
-    shapes_key_used: str
-    policy_requested: BiologicalPolicy
-    policy_applied: BiologicalPolicy
-    keep_table_mask: Optional[np.ndarray]
-    n_cells_source: int
-    n_after_biological_filter: int
-    drop_counts: dict
-    warnings: list
-
-
-# Preference order for canonical stVisuome shape layers when the user
-# accepted the default --shapes-key. Walked in this order; first match wins.
-CANONICAL_SHAPE_PREFERENCE: tuple = (
-    "filtered_cell_circles",
-    "filtered_cell_boundaries",
-)
 
 
 # ── Core helpers ──────────────────────────────────────────────────────────
@@ -147,13 +118,6 @@ def resolve_table_shape_alignment(
         n_shape_in=len(shape_ids),
         n_aligned=len(aligned_ids),
     )
-
-
-def mask_by_nucleus_boundaries(cell_ids, nucleus_boundaries) -> np.ndarray:
-    """Boolean mask keeping cells whose ID is in ``nucleus_boundaries.index``."""
-    cell_ids = pd.Series(cell_ids).astype(str)
-    keep_set = set(pd.Index(nucleus_boundaries.index).astype(str).tolist())
-    return cell_ids.isin(keep_set).to_numpy()
 
 
 def mask_positive_centroid(cx_px, cy_px) -> np.ndarray:
@@ -247,156 +211,6 @@ def resolve_patch_policy(policy: PatchPolicy, extract_mode: str) -> PatchPolicy:
     return policy
 
 
-def _pick_canonical_shape_key(
-    sdata, shapes_key: str, shapes_key_was_default: bool
-) -> tuple[str, list]:
-    """Return the shape key to use under stvisuome_canonical and any warnings.
-
-    When the user kept ``--shapes-key`` at the default, walk
-    :data:`CANONICAL_SHAPE_PREFERENCE` and pick the first match in
-    ``sdata.shapes``. When the user set ``--shapes-key`` explicitly, keep
-    that key and warn if a canonical filtered layer is also present.
-    """
-    warnings: list = []
-    if shapes_key_was_default:
-        for candidate in CANONICAL_SHAPE_PREFERENCE:
-            if candidate in sdata.shapes:
-                return candidate, warnings
-        return shapes_key, warnings
-
-    available_filtered = [
-        candidate
-        for candidate in CANONICAL_SHAPE_PREFERENCE
-        if candidate in sdata.shapes
-    ]
-    if available_filtered:
-        warnings.append(
-            f"stvisuome_canonical: --shapes-key was set explicitly to "
-            f"{shapes_key!r}; not auto-swapping. Filtered shape layers "
-            f"available: {available_filtered}."
-        )
-    return shapes_key, warnings
-
-
-def resolve_biological_policy(
-    *,
-    sdata,
-    table_key: str,
-    shapes_key: str,
-    policy: BiologicalPolicy,
-    table_key_was_default: bool,
-    shapes_key_was_default: bool = True,
-    filtered_table_key: str = "filtered_table",
-    nucleus_boundaries_key: str = "nucleus_boundaries",
-    cell_id_column: str = "cell_id",
-) -> BiologicalResolution:
-    """Resolve which table/shape keys to consume and what mask to apply.
-
-    The returned ``keep_table_mask`` is aligned to the resolved table
-    (``sdata.tables[table_key_used]``) and is ``None`` when no row mask is
-    needed. Callers are responsible for applying the mask and aligning the
-    chosen shape layer afterwards via ``resolve_table_shape_alignment``.
-
-    This function only reads from ``sdata``; it never mutates it.
-    """
-    requested = policy
-    warnings: list = []
-
-    if policy is BiologicalPolicy.AUTO:
-        has_filtered = filtered_table_key in sdata.tables
-        if has_filtered and table_key_was_default:
-            policy = BiologicalPolicy.STVISUOME_CANONICAL
-        else:
-            policy = BiologicalPolicy.NONE
-            if has_filtered and not table_key_was_default:
-                warnings.append(
-                    f"auto: {filtered_table_key!r} is present but --table-key "
-                    f"was set to {table_key!r}; not auto-swapping. Pass "
-                    "--biological-filter-policy stvisuome_canonical to force."
-                )
-
-    if policy is BiologicalPolicy.STVISUOME_CANONICAL:
-        if filtered_table_key not in sdata.tables:
-            raise KeyError(
-                "biological_filter_policy=stvisuome_canonical requires "
-                f"sdata.tables[{filtered_table_key!r}] to exist."
-            )
-        resolved_table = sdata.tables[filtered_table_key]
-        n_source = int(resolved_table.n_obs)
-        resolved_shapes_key, shape_warnings = _pick_canonical_shape_key(
-            sdata, shapes_key, shapes_key_was_default
-        )
-        warnings = list(warnings) + shape_warnings
-        return BiologicalResolution(
-            table_key_used=filtered_table_key,
-            shapes_key_used=resolved_shapes_key,
-            policy_requested=requested,
-            policy_applied=policy,
-            keep_table_mask=None,
-            n_cells_source=n_source,
-            n_after_biological_filter=n_source,
-            drop_counts={},
-            warnings=warnings,
-        )
-
-    if policy is BiologicalPolicy.STVISUOME_NUCLEUS_BOUNDARY:
-        if nucleus_boundaries_key not in sdata.shapes:
-            raise KeyError(
-                "biological_filter_policy=stvisuome_nucleus_boundary requires "
-                f"sdata.shapes[{nucleus_boundaries_key!r}] to exist."
-            )
-        if table_key not in sdata.tables:
-            raise KeyError(
-                f"sdata has no table {table_key!r} for nucleus-boundary filtering."
-            )
-        adata = sdata.tables[table_key]
-        table_ids = get_table_cell_ids(adata, cell_id_column=cell_id_column)
-        keep_mask = mask_by_nucleus_boundaries(
-            table_ids, sdata.shapes[nucleus_boundaries_key]
-        )
-        n_source = int(adata.n_obs)
-        n_kept = int(keep_mask.sum())
-        if n_kept == 0:
-            raise ValueError(
-                "biological_filter_policy=stvisuome_nucleus_boundary removed "
-                f"all cells: no overlap between table {table_key!r} cell_ids "
-                f"and shape {nucleus_boundaries_key!r} index."
-            )
-        return BiologicalResolution(
-            table_key_used=table_key,
-            shapes_key_used=shapes_key,
-            policy_requested=requested,
-            policy_applied=policy,
-            keep_table_mask=keep_mask,
-            n_cells_source=n_source,
-            n_after_biological_filter=n_kept,
-            drop_counts={"missing_nucleus_boundary": n_source - n_kept},
-            warnings=warnings,
-        )
-
-    if policy is BiologicalPolicy.NONE:
-        if table_key not in sdata.tables:
-            raise KeyError(f"sdata has no table {table_key!r}.")
-        adata = sdata.tables[table_key]
-        n_source = int(adata.n_obs)
-        applied_warnings = list(warnings) + [
-            "no biological filtering applied; all rows of the selected table are kept."
-        ]
-        return BiologicalResolution(
-            table_key_used=table_key,
-            shapes_key_used=shapes_key,
-            policy_requested=requested,
-            policy_applied=policy,
-            keep_table_mask=None,
-            n_cells_source=n_source,
-            n_after_biological_filter=n_source,
-            drop_counts={},
-            warnings=applied_warnings,
-        )
-
-    raise ValueError(f"Unknown biological policy: {policy!r}")
-
-
 # ── Reporting ─────────────────────────────────────────────────────────────
 def build_filter_report(
     *,
@@ -407,12 +221,9 @@ def build_filter_report(
     extract_mode: str,
     source_table_key: str,
     source_shape_key: str,
-    biological_policy_requested: str,
-    biological_policy_applied: str,
     patch_policy_requested: str,
     patch_policy_applied: str,
     n_cells_source: int,
-    n_after_biological_filter: int,
     n_after_shape_alignment: int,
     n_after_positive_centroid: int,
     n_after_patch_policy: int,
@@ -431,8 +242,7 @@ def build_filter_report(
 
     Sequential filtering counters:
       n_cells_source
-        → n_after_biological_filter   (Layer 1 row mask only)
-        → n_after_shape_alignment     (table↔shape alignment, may drop more)
+        → n_after_shape_alignment     (table↔shape alignment)
         → n_after_positive_centroid   (cx_px>0 & cy_px>0)
         → n_after_patch_policy        (Layer 2)
         → n_out                        (after optional --n-sample)
@@ -445,12 +255,9 @@ def build_filter_report(
         "extract_mode": str(extract_mode),
         "source_table_key": str(source_table_key),
         "source_shape_key": str(source_shape_key),
-        "biological_policy_requested": str(biological_policy_requested),
-        "biological_policy_applied": str(biological_policy_applied),
         "patch_policy_requested": str(patch_policy_requested),
         "patch_policy_applied": str(patch_policy_applied),
         "n_cells_source": int(n_cells_source),
-        "n_after_biological_filter": int(n_after_biological_filter),
         "n_after_shape_alignment": int(n_after_shape_alignment),
         "n_after_positive_centroid": int(n_after_positive_centroid),
         "n_after_patch_policy": int(n_after_patch_policy),
@@ -479,18 +286,14 @@ def write_filter_report(
 
 
 __all__ = [
-    "BiologicalPolicy",
     "PatchPolicy",
     "AlignmentResult",
     "PatchMaskResult",
-    "BiologicalResolution",
     "get_table_cell_ids",
     "resolve_table_shape_alignment",
-    "mask_by_nucleus_boundaries",
     "mask_positive_centroid",
     "mask_patch_policy",
     "resolve_patch_policy",
-    "resolve_biological_policy",
     "build_filter_report",
     "write_filter_report",
 ]
