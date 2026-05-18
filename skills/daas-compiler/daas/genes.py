@@ -62,13 +62,14 @@ def validate_gene_panel(
     sample_ids: list[str],
     gene_panel: list[str],
 ) -> None:
-    """Assert every adata (already sliced to gene_panel) has var_names == gene_panel."""
+    """Raise ValueError if any adata (already sliced) has var_names != gene_panel."""
     for a, sid in zip(adatas, sample_ids):
         actual = list(a.var_names)
-        assert actual == gene_panel, (
-            f"Sample {sid!r}: var_names differ from gene_panel. "
-            f"len(actual)={len(actual)} len(panel)={len(gene_panel)}"
-        )
+        if actual != gene_panel:
+            raise ValueError(
+                f"Sample {sid!r}: var_names differ from gene_panel. "
+                f"len(actual)={len(actual)} len(panel)={len(gene_panel)}"
+            )
 
 
 def gene_panel_sha256(gene_panel: list[str]) -> str:

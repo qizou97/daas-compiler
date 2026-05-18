@@ -76,7 +76,7 @@ def test_validate_gene_panel_passes():
 
 def test_validate_gene_panel_wrong_order_raises():
     a = _adata(["A", "B"])
-    with pytest.raises(AssertionError, match="S1"):
+    with pytest.raises(ValueError, match="S1"):
         validate_gene_panel([a], ["S1"], ["B", "A"])
 
 
