@@ -46,7 +46,7 @@ def _iou(poly_a, poly_b) -> float:
     if inter == 0:
         return 0.0
     union = poly_a.union(poly_b).area
-    return inter / union if union > 0 else 0.0
+    return inter / union
 
 
 def filter_by_nucleus_overlap(
