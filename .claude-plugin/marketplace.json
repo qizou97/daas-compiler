@@ -1,0 +1,16 @@
+{
+  "name": "daas-compiler",
+  "owner": { "name": "qizou97" },
+  "metadata": {
+    "description": "DaaS cell-patch compiler skill",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "daas-compiler",
+      "source": ".",
+      "description": "Cell-centered HE patch extraction + indexed WebDataset pipeline",
+      "version": "0.1.0"
+    }
+  ]
+}
