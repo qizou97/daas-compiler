@@ -8,6 +8,8 @@ import pytest
 from PIL import Image
 from scipy.sparse import csr_matrix
 
+from daas.genes import gene_panel_sha256 as _gene_panel_sha256
+
 
 IDX_MAGIC      = b"CIDX0001"
 IDX_RECORD_FMT = "<iQIQII"
@@ -87,3 +89,68 @@ def synthetic_sample(tmp_path):
 
     return {"dir": sample_dir, "manifest": manifest,
             "n_cells": n_cells, "n_genes": n_genes, "sample_id": sample_id}
+
+
+@pytest.fixture
+def compiled_dir(tmp_path, synthetic_sample):
+    """Minimal compiled/ directory with bundled WDS shard, gene_panel, manifest."""
+    import json, tarfile, io
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    import anndata
+
+    cd = tmp_path / "compiled"
+    cd.mkdir()
+
+    n_genes   = synthetic_sample["n_genes"]
+    n_cells   = synthetic_sample["n_cells"]
+    sample_id = synthetic_sample["sample_id"]
+    gene_panel = [f"gene_{i}" for i in range(n_genes)]
+    sha = _gene_panel_sha256(gene_panel)
+    (cd / "gene_panel.json").write_text(json.dumps(gene_panel))
+    (cd / "gene_panel.sha256").write_text(sha)
+
+    sample_dir = cd / sample_id
+    sample_dir.mkdir()
+    shard_path = sample_dir / "shard-000000.tar"
+
+    meta_rows = []
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tf:
+        for i in range(n_cells):
+            key = f"{i:09d}"
+            jpg = _make_jpg()
+            indices = np.array([0, 1], dtype=np.int32)
+            values  = np.array([1.0, 2.0], dtype=np.float32)
+            npz_buf = io.BytesIO()
+            np.savez(npz_buf, indices=indices, values=values)
+            meta_bytes = json.dumps({
+                "global_idx": i, "sample_id": sample_id,
+                "cell_id": f"cell_{i}", "task": "he2st",
+                "n_genes": n_genes, "gene_panel_sha256": sha,
+            }).encode()
+            for ext, data in [(".jpg", jpg), (".expr.npz", npz_buf.getvalue()), (".json", meta_bytes)]:
+                ti = tarfile.TarInfo(name=f"{key}{ext}")
+                ti.size = len(data)
+                tf.addfile(ti, io.BytesIO(data))
+            meta_rows.append({
+                "global_idx": i, "sample_id": sample_id,
+                "cell_id": f"cell_{i}", "sample_key": key,
+                "global_key": key, "shard_path": str(shard_path),
+            })
+    shard_path.write_bytes(buf.getvalue())
+
+    bm = pd.DataFrame(meta_rows)
+    bm.to_parquet(cd / "bundled_manifest.parquet", index=False)
+
+    X = csr_matrix(np.random.rand(n_cells, n_genes).astype(np.float32))
+    obs = pd.DataFrame({"sample_id": [sample_id]*n_cells,
+                        "cell_id": [f"cell_{i}" for i in range(n_cells)]})
+    obs.index = [f"{i:09d}" for i in range(n_cells)]
+    adata = anndata.AnnData(X=X, obs=obs, var=pd.DataFrame(index=gene_panel))
+    adata.write_h5ad(cd / "expression.h5ad")
+
+    mf = pd.DataFrame(meta_rows)[["global_idx", "sample_id", "cell_id", "shard_path", "sample_key"]]
+    mf.to_parquet(cd / "manifest.parquet", index=False)
+
+    return cd
