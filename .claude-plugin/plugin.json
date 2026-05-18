@@ -1,0 +1,20 @@
+{
+  "name": "daas-compiler",
+  "description": "Compile SpatialData zarr samples into cell-centered HE patch WebDataset for ML training (extract → compile → train)",
+  "version": "0.1.0",
+  "author": { "name": "qizou97" },
+  "homepage": "https://github.com/qizou97/daas-compiler",
+  "repository": "https://github.com/qizou97/daas-compiler",
+  "license": "MIT",
+  "keywords": [
+    "spatialdata",
+    "wsidata",
+    "lazyslide",
+    "spatial-transcriptomics",
+    "histology",
+    "h&e",
+    "webdataset",
+    "pytorch",
+    "single-cell"
+  ]
+}
