@@ -23,18 +23,12 @@ from wsidata import open_wsi, TileSpec
 from wsidata.io import add_tiles
 import lazyslide.pl as lpl
 
-from daas.cli_args import (
-    DEFAULT_SHAPES_KEY,
-    DEFAULT_TABLE_KEY,
-    parse_extract_sample_args,
-)
+from daas.cli_args import parse_extract_sample_args
 from daas.filtering import (
-    BiologicalPolicy,
     PatchPolicy,
     build_filter_report,
     mask_patch_policy,
     mask_positive_centroid,
-    resolve_biological_policy,
     resolve_patch_policy,
     resolve_table_shape_alignment,
     write_filter_report,
@@ -205,44 +199,29 @@ def main():
     print(f"[1/9] Loading {zarr_path} …")
     sdata  = sd.read_zarr(zarr_path)
 
-    # ── Phase 1b: Biological filter (Layer 1) ────────────────────────────────
-    bio_policy = BiologicalPolicy(args.biological_filter_policy)
-    bio = resolve_biological_policy(
-        sdata=sdata,
-        table_key=args.table_key,
-        shapes_key=args.shapes_key,
-        policy=bio_policy,
-        table_key_was_default=(args.table_key == DEFAULT_TABLE_KEY),
-        shapes_key_was_default=(args.shapes_key == DEFAULT_SHAPES_KEY),
-        filtered_table_key=args.filtered_table_key,
-        nucleus_boundaries_key=args.nucleus_boundaries_key,
-        cell_id_column=args.cell_id_column,
-    )
-    table_key_used  = bio.table_key_used
-    shapes_key_used = bio.shapes_key_used
-    print(f"      [bio] policy_requested={bio.policy_requested.value} "
-          f"applied={bio.policy_applied.value}  "
-          f"table={table_key_used}  shapes={shapes_key_used}  "
-          f"{bio.n_cells_source} → {bio.n_after_biological_filter}")
-    for warn in bio.warnings:
-        print(f"      [bio:warn] {warn}")
-
-    adata_after_bio = sdata.tables[table_key_used]
-    if bio.keep_table_mask is not None:
-        adata_after_bio = adata_after_bio[bio.keep_table_mask].copy()
-    gdf_full = sdata.shapes[shapes_key_used]
+    # ── Phase 1b: Load table + shapes, align ─────────────────────────────────
+    print(f"[1b] Loading table={args.table_key!r}  shapes={args.shapes_key!r} …")
+    if args.table_key not in sdata.tables:
+        raise KeyError(
+            f"sdata has no table {args.table_key!r}. "
+            f"Available tables: {list(sdata.tables.keys())}. "
+            "Run filter_tissue.py / filter_nucleus_presence.py first, or "
+            "pass --table-key with the correct key."
+        )
+    adata_source = sdata.tables[args.table_key]
+    gdf_full = sdata.shapes[args.shapes_key]
+    n_cells_source = int(adata_source.n_obs)
 
     align = resolve_table_shape_alignment(
-        adata_after_bio, gdf_full, cell_id_column=args.cell_id_column,
+        adata_source, gdf_full, cell_id_column=args.cell_id_column,
     )
     if align.alignment_mode != "exact":
-        print(f"      [align] non-exact alignment: "
-              f"{align.n_aligned} aligned rows from table={align.n_table_in}, "
-              f"shapes={align.n_shape_in}")
-    adata = adata_after_bio[align.adata_row_indices].copy()
+        print(f"      [align] non-exact: {align.n_aligned} aligned from "
+              f"table={align.n_table_in}, shapes={align.n_shape_in}")
+    adata = adata_source[align.adata_row_indices].copy()
     gdf   = gdf_full.iloc[align.shape_row_indices].copy()
-    unaligned_dropped = bio.n_after_biological_filter - int(adata.n_obs)
-    print(f"      {len(gdf)} cells, {adata.n_vars} genes — alignment OK")
+    n_after_shape_alignment = int(adata.n_obs)
+    print(f"      {n_after_shape_alignment} cells, {adata.n_vars} genes — alignment OK")
 
     # ── Phase 2: MPP derivation ───────────────────────────────────────────────
     print("[2/9] Deriving SLIDE_MPP …")
@@ -313,9 +292,9 @@ def main():
 
     # ── Phase 3c: Filter report (written BEFORE any shards) ──────────────────
     drop_counts_by_reason: dict = {}
+    unaligned_dropped = n_cells_source - n_after_shape_alignment
     if unaligned_dropped:
         drop_counts_by_reason["unaligned_with_shapes"] = int(unaligned_dropped)
-    drop_counts_by_reason.update({k: int(v) for k, v in bio.drop_counts.items()})
     drop_counts_by_reason["non_positive_centroid"] = int((~pos_mask).sum())
     drop_counts_by_reason.update(
         {k: int(v) for k, v in patch_res.drop_counts.items()}
@@ -328,15 +307,12 @@ def main():
         output_dir=str(output_dir),
         image_key=args.image_key,
         extract_mode=args.extract_mode,
-        source_table_key=table_key_used,
-        source_shape_key=shapes_key_used,
-        biological_policy_requested=bio.policy_requested.value,
-        biological_policy_applied=bio.policy_applied.value,
+        source_table_key=args.table_key,
+        source_shape_key=args.shapes_key,
         patch_policy_requested=requested_patch_policy.value,
         patch_policy_applied=patch_policy_applied.value,
-        n_cells_source=int(bio.n_cells_source),
-        n_after_biological_filter=int(bio.n_after_biological_filter),
-        n_after_shape_alignment=int(adata.n_obs),
+        n_cells_source=n_cells_source,
+        n_after_shape_alignment=int(n_after_shape_alignment),
         n_after_positive_centroid=int(n_after_positive_centroid),
         n_after_patch_policy=int(n_after_patch_policy),
         n_out=int(n_out),
@@ -348,7 +324,7 @@ def main():
         image_width_px=int(IMG_W),
         image_height_px=int(IMG_H),
         seed=int(args.seed),
-        warnings=list(bio.warnings),
+        warnings=[],
     )
     report_path = write_filter_report(
         report_dict, output_dir, name=args.filter_report_name
@@ -455,8 +431,8 @@ def main():
             "orig_cell_index":    orig_idx,
             "mpp_target":         MPP_TGT,
             "slide_mpp":          SLIDE_MPP,
-            "source_table_key":   table_key_used,
-            "source_shape_key":   shapes_key_used,
+            "source_table_key":   args.table_key,
+            "source_shape_key":   args.shapes_key,
         }
         shard_buf.append((local_i, sk, jpg_bytes,
                           json.dumps(meta).encode()))
