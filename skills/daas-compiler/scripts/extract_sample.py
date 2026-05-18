@@ -40,7 +40,8 @@ def parse_args():
     p.add_argument("--shapes-key",  default="cell_circles")
     p.add_argument("--table-key",   default="table")
     p.add_argument("--skip-viz",    action="store_true",
-                   help="Skip post-extraction visualization")
+                   help="Skip optional viz (centroid overlay + patch grid). "
+                        "The lazyslide.pl.tiles overview is always produced.")
     p.add_argument("--extract-mode", default="tile_images",
                    choices=["tile_images", "full_scale0", "full_ops_level"],
                    help="Patch extraction strategy: tile_images (default, "
@@ -173,25 +174,35 @@ def _iter_full_load(full_img, x0s, y0s, crop_w, out_w, ds_x, ds_y):
         yield tile_hwc
 
 
+def _save_tiles_overview(output_dir, wsi, dpi=300):
+    """Render lazyslide.pl.tiles overview. Always called, regardless of --skip-viz."""
+    viz_dir = output_dir / "viz"
+    viz_dir.mkdir(exist_ok=True)
+    print(f"  [viz] Global tiles overview (dpi={dpi}) …")
+    lpl.tiles(wsi, tile_key="cell_tiles")
+    fig = plt.gcf()
+    out = viz_dir / "viz_global_tiles.png"
+    fig.savefig(out, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    print(f"        → {out}")
+    return out
+
+
 def _visualize(output_dir, sample_id, cells_df, sdata, wsi,
                image_key, SCALE_SHAPE, PATCH_SIZE, BASE_SIZE,
                IMG_W, IMG_H, seed, grid_n=25):
-    """Generate 3 post-extraction viz outputs in {output_dir}/viz/."""
+    """Generate post-extraction viz outputs in {output_dir}/viz/.
+
+    The lazyslide.pl.tiles overview is produced separately by
+    _save_tiles_overview() and is NOT gated by --skip-viz. This
+    function handles the optional centroid overlay + patch grid.
+    """
     import io as _io, tarfile as _tarfile
     viz_dir = output_dir / "viz"
     viz_dir.mkdir(exist_ok=True)
     SCALE = PATCH_SIZE / BASE_SIZE
 
-    # ── 1. Global tiles overview ─────────────────────────────────────────────
-    print("  [viz] Global tiles overview …")
-    lpl.tiles(wsi, tile_key="cell_tiles")
-    fig = plt.gcf()
-    out1 = viz_dir / "viz_global_tiles.png"
-    fig.savefig(out1, dpi=72, bbox_inches="tight")
-    plt.close(fig)
-    print(f"        → {out1}")
-
-    # ── 2. Centroid overlay on thumbnail ─────────────────────────────────────
+    # ── 1. Centroid overlay on thumbnail ─────────────────────────────────────
     print("  [viz] Centroid overlay …")
     try:
         thumb = wsi.reader.get_thumbnail(size=(2000, 2000))
@@ -212,7 +223,7 @@ def _visualize(output_dir, sample_id, cells_df, sdata, wsi,
     plt.close(fig)
     print(f"        → {out2}")
 
-    # ── 3. Patch grid with boundary overlays ─────────────────────────────────
+    # ── 2. Patch grid with boundary overlays ─────────────────────────────────
     print(f"  [viz] Patch grid ({grid_n} patches) …")
     cell_bounds = sdata.shapes.get("cell_boundaries")
     nucl_bounds = sdata.shapes.get("nucleus_boundaries")
@@ -483,6 +494,9 @@ def main():
     print("[9/9] Validation …")
     _validate(cells_df, adata_out, adata, BASE_HALF, n_out, rng, PATCH_SIZE)
 
+    # Tiles overview is always produced (small, sample-essential).
+    _save_tiles_overview(output_dir, wsi)
+
     if not args.skip_viz:
         _visualize(output_dir, sample_id, cells_df, sdata, wsi,
                    args.image_key, SCALE_SHAPE, PATCH_SIZE, BASE_SIZE,
@@ -491,7 +505,7 @@ def main():
     total_mb = sum(f.stat().st_size for f in output_dir.glob("*.tar")) / 1e6
     elapsed  = time.time()-t0
     n_shards_total = len(list(output_dir.glob("*.tar")))
-    viz_note = "" if args.skip_viz else f"\n  viz outputs → {output_dir}/viz/"
+    viz_note = f"\n  viz outputs → {output_dir}/viz/"
     print(f"""
 {'='*60}
   EXTRACT COMPLETE — {sample_id}  ({n_out} cells, {n_shards_total} shards, {total_mb:.0f}MB){viz_note}

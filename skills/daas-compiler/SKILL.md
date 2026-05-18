@@ -510,9 +510,9 @@ python3 "${SKILL_DIR}/scripts/viz_sample.py" \
 
 Outputs to `{output}/viz/`:
 - `viz_preflight_boundary.png` — cell+nucleus boundary overlay grid (from extract pre-flight)
-- `viz_global_tiles.png` — all tiles on whole-slide overview
-- `viz_centroid_overlay.png` — centroids on thumbnail
-- `viz_patch_grid.png` — 5×5 grid with cell (cyan) + nucleus (yellow) boundaries, center crosshair (red)
+- `viz_global_tiles.png` — all tiles on whole-slide overview via `lazyslide.pl.tiles` at dpi=300; **always produced**, even with `--skip-viz`
+- `viz_centroid_overlay.png` — centroids on thumbnail (skipped with `--skip-viz`)
+- `viz_patch_grid.png` — 5×5 grid with cell (cyan) + nucleus (yellow) boundaries, center crosshair (red) (skipped with `--skip-viz`)
 
 ### Boundary overlay coordinate transform
 

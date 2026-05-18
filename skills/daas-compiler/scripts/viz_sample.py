@@ -84,7 +84,7 @@ def main():
     lpl.tiles(wsi, tile_key="cell_tiles")
     fig = plt.gcf()
     out1 = viz_dir / "viz_global_tiles.png"
-    fig.savefig(out1, dpi=72, bbox_inches="tight")
+    fig.savefig(out1, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"    Saved {out1}")
 
