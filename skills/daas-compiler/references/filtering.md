@@ -40,6 +40,8 @@ CLI flag: `--patch-filter-policy {auto, strict_no_padding, stvisuome_minimal, st
 | `stvisuome_minimal` | `full_oob` only — keeps `need_pad` (boundary-crossing tiles). wsidata pads them on read. | **`tile_images` only**; raises `ValueError` for `full_scale0` / `full_ops_level`. |
 | `strict_with_padding` | Reserved. Raises `NotImplementedError` until explicit padding is wired through `extract_sample.py`. | — |
 
+**Parse-time validation.** The combinations `stvisuome_minimal + full_scale0`, `stvisuome_minimal + full_ops_level`, and `strict_with_padding (any mode)` are rejected immediately after `parse_args` with a clear message — `extract_sample.py` exits 2 before loading the zarr. The same check is exported as `daas.cli_args.validate_policy_combination(args)` for programmatic callers.
+
 ---
 
 ## 2. Decision table
@@ -60,7 +62,16 @@ The table below maps the user's situation to the recommended policy pair. The ag
 
 ## 3. Drop reason taxonomy
 
-`filter_report.json` reports `drop_counts_by_reason` keyed on the strings below. Counts may overlap across keys (e.g. a cell can be both `non_positive_centroid` and `full_oob`); they are **independent per-reason counts**, not a partition. The sequential `n_after_*` fields give the true post-filter survivor counts.
+`filter_report.json` reports `drop_counts_by_reason` keyed on the strings below. Counts may overlap across keys (e.g. a cell can be both `non_positive_centroid` and `full_oob`); they are **independent per-reason counts**, not a partition. The sequential `n_after_*` fields give the true post-filter survivor counts:
+
+```
+n_cells_source
+  → n_after_biological_filter   (Layer 1 row mask only — pre-alignment)
+  → n_after_shape_alignment     (intersection with the chosen shape layer)
+  → n_after_positive_centroid   (cx_px > 0 & cy_px > 0)
+  → n_after_patch_policy        (Layer 2)
+  → n_out                        (after optional --n-sample)
+```
 
 | Key | Meaning | Layer |
 |---|---|---|
@@ -85,15 +96,18 @@ The table below maps the user's situation to the recommended policy pair. The ag
   "zarr_path": "/data/spatialdata/A_028.zarr",
   "output_dir": "/data/out/A_028",
   "image_key": "he_image",
+  "image_width_px": 38912,
+  "image_height_px": 26624,
   "extract_mode": "full_ops_level",
   "source_table_key": "filtered_table",
-  "source_shape_key": "cell_circles",
+  "source_shape_key": "filtered_cell_circles",
   "biological_policy_requested": "auto",
   "biological_policy_applied": "stvisuome_canonical",
   "patch_policy_requested": "auto",
   "patch_policy_applied": "strict_no_padding",
   "n_cells_source": 184523,
   "n_after_biological_filter": 184523,
+  "n_after_shape_alignment": 184523,
   "n_after_positive_centroid": 184501,
   "n_after_patch_policy": 183872,
   "n_out": 10000,
@@ -112,12 +126,18 @@ The table below maps the user's situation to the recommended policy pair. The ag
 }
 ```
 
+Note how `source_shape_key` resolved to `filtered_cell_circles` (preferred over `cell_circles` when both exist and the user left `--shapes-key` at default).
+
 ### B. Raw zarr, nucleus-boundary filter, tile_images + stvisuome_minimal
+
+`n_after_biological_filter` reflects the Layer-1 mask only; `n_after_shape_alignment` reflects the intersection with the chosen shape layer (here equal because shapes cover all retained cell_ids).
 
 ```json
 {
   "sample_id": "B_041",
   "zarr_path": "/data/spatialdata/B_041.zarr",
+  "image_width_px": 32768,
+  "image_height_px": 24576,
   "extract_mode": "tile_images",
   "source_table_key": "table",
   "source_shape_key": "cell_circles",
@@ -127,6 +147,7 @@ The table below maps the user's situation to the recommended policy pair. The ag
   "patch_policy_applied": "stvisuome_minimal",
   "n_cells_source": 210004,
   "n_after_biological_filter": 197610,
+  "n_after_shape_alignment": 197610,
   "n_after_positive_centroid": 197604,
   "n_after_patch_policy": 197441,
   "n_out": 197441,
@@ -149,13 +170,26 @@ The table below maps the user's situation to the recommended policy pair. The ag
   "biological_policy_applied": "none",
   "patch_policy_applied": "strict_no_padding",
   "source_table_key": "table",
+  "image_width_px": 12288,
+  "image_height_px": 8192,
   "n_cells_source": 100000,
   "n_after_biological_filter": 100000,
+  "n_after_shape_alignment": 100000,
   "warnings": [
     "no biological filtering applied; all rows of the selected table are kept."
   ]
 }
 ```
+
+### Shape-key preference under stvisuome_canonical
+
+When `auto` resolves to `stvisuome_canonical` (or it's selected explicitly) **and** the user kept `--shapes-key` at its default, the resolver walks this preference list and picks the first key present:
+
+1. `filtered_cell_circles`
+2. `filtered_cell_boundaries`
+3. `cell_circles` (fallback)
+
+If the user passes `--shapes-key` explicitly, the resolver preserves it and emits a `warnings[]` entry naming any filtered candidates it skipped.
 
 When `warnings` is non-empty, surface it verbatim in the user-facing reply.
 

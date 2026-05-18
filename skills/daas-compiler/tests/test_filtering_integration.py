@@ -4,11 +4,11 @@ These do not run the full ``extract_sample.py`` CLI (which requires
 ``wsidata``/``lazyslide`` + a real H&E pyramid). Instead they mirror the
 orchestration of Phases 1b–3c so the alignment invariants and the
 filter-report contract are verified end-to-end at the Python level.
+
+CLI parse-time tests use the lightweight :mod:`daas.cli_args` module to
+avoid dragging in heavyweight extraction deps just for argument parsing.
 """
 import json
-import sys
-import importlib.util
-from pathlib import Path
 from types import SimpleNamespace
 
 import anndata
@@ -19,6 +19,11 @@ import pytest
 from scipy.sparse import csr_matrix
 from shapely.geometry import Point
 
+from daas.cli_args import (
+    build_extract_sample_parser,
+    parse_extract_sample_args,
+    validate_policy_combination,
+)
 from daas.filtering import (
     BiologicalPolicy,
     PatchPolicy,
@@ -261,12 +266,14 @@ def test_filter_report_written_with_required_fields(tmp_path):
         patch_policy_requested="auto",
         patch_policy_applied="strict_no_padding",
         n_cells_source=int(bio.n_cells_source),
-        n_after_biological_filter=int(adata.n_obs),
+        n_after_biological_filter=int(bio.n_after_biological_filter),
+        n_after_shape_alignment=int(adata.n_obs),
         n_after_positive_centroid=int(pos_mask.sum()),
         n_after_patch_policy=n_valid,
         n_out=n_out,
         drop_counts_by_reason=drop_counts,
         patch_size=224, target_mpp=0.5, slide_mpp=1.0, base_size=BASE_SIZE,
+        image_width_px=100, image_height_px=100,
         seed=42, warnings=list(bio.warnings),
     )
     report_path = write_filter_report(report, tmp_path)
@@ -289,32 +296,20 @@ def test_filter_report_written_with_required_fields(tmp_path):
 
 
 # ── Required test 7: backward compatibility — default CLI is strict ──────
-def _load_extract_sample_module():
-    """Import scripts/extract_sample.py as a module without executing main."""
-    skill_root = Path(__file__).resolve().parents[1]
-    script_path = skill_root / "scripts" / "extract_sample.py"
-    spec = importlib.util.spec_from_file_location("_extract_sample", script_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def test_cli_defaults_resolve_to_strict_no_padding():
+    """`auto` policies on the CLI must resolve to ``strict_no_padding``.
 
-
-def test_cli_defaults_resolve_to_strict_no_padding(monkeypatch):
-    """`auto` policies on the CLI must resolve to ``strict_no_padding`` and
-    a non-canonical sdata so existing extractions stay bit-identical."""
-    mod = _load_extract_sample_module()
-    monkeypatch.setattr(sys, "argv",
-                        ["extract_sample.py", "--zarr", "X", "--output", "Y"])
-    args = mod.parse_args()
-    # The new flags exist and default to AUTO.
+    Uses the lightweight ``daas.cli_args`` parser so this test does NOT
+    pull in ``wsidata``/``lazyslide``/``matplotlib`` just to verify
+    argparse defaults.
+    """
+    args = parse_extract_sample_args(["--zarr", "X", "--output", "Y"])
     assert args.biological_filter_policy == "auto"
     assert args.patch_filter_policy == "auto"
-    # AUTO patch policy collapses to STRICT_NO_PADDING regardless of mode.
     assert (
         resolve_patch_policy(PatchPolicy(args.patch_filter_policy), args.extract_mode)
         is PatchPolicy.STRICT_NO_PADDING
     )
-    # Other historic defaults are unchanged.
     assert args.table_key == "table"
     assert args.shapes_key == "cell_circles"
     assert args.image_key == "he_image"
@@ -323,6 +318,52 @@ def test_cli_defaults_resolve_to_strict_no_padding(monkeypatch):
     assert args.nucleus_boundaries_key == "nucleus_boundaries"
     assert args.filtered_table_key == "filtered_table"
     assert args.filter_report_name == "filter_report.json"
+
+
+def test_cli_rejects_stvisuome_minimal_with_full_modes():
+    """Parse-time validation: stvisuome_minimal + full_* exits cleanly."""
+    for mode in ("full_scale0", "full_ops_level"):
+        with pytest.raises(SystemExit, match="stvisuome_minimal"):
+            parse_extract_sample_args(
+                ["--zarr", "X", "--output", "Y",
+                 "--patch-filter-policy", "stvisuome_minimal",
+                 "--extract-mode", mode]
+            )
+
+
+def test_cli_rejects_strict_with_padding():
+    """Parse-time validation: strict_with_padding is reserved."""
+    with pytest.raises(SystemExit, match="strict_with_padding"):
+        parse_extract_sample_args(
+            ["--zarr", "X", "--output", "Y",
+             "--patch-filter-policy", "strict_with_padding"]
+        )
+
+
+def test_cli_allows_stvisuome_minimal_with_tile_images():
+    """stvisuome_minimal + tile_images is the documented happy path."""
+    args = parse_extract_sample_args(
+        ["--zarr", "X", "--output", "Y",
+         "--patch-filter-policy", "stvisuome_minimal",
+         "--extract-mode", "tile_images"]
+    )
+    assert args.patch_filter_policy == "stvisuome_minimal"
+    assert args.extract_mode == "tile_images"
+
+
+def test_validate_policy_combination_callable_directly():
+    """Programmatic validators can be called without going through the parser."""
+    p = build_extract_sample_parser()
+    ok = p.parse_args(["--zarr", "X", "--output", "Y",
+                       "--patch-filter-policy", "strict_no_padding",
+                       "--extract-mode", "full_ops_level"])
+    validate_policy_combination(ok)  # must not raise
+
+    bad = p.parse_args(["--zarr", "X", "--output", "Y",
+                        "--patch-filter-policy", "stvisuome_minimal",
+                        "--extract-mode", "full_ops_level"])
+    with pytest.raises(SystemExit, match="stvisuome_minimal"):
+        validate_policy_combination(bad)
 
 
 def test_existing_synthetic_manifest_schema_still_loads(synthetic_sample):

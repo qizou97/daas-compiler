@@ -162,9 +162,10 @@ Positive-centroid filtering (`cx_px > 0 & cy_px > 0`) runs before the patch mask
 
 Written to `{output}/filter_report.json` **before any shard**. Summarize its contents in the user-facing reply after every extraction:
 
-- `source_table_key`, `source_shape_key` (resolved keys actually consumed)
+- `source_table_key`, `source_shape_key` (resolved keys actually consumed; canonical mode prefers `filtered_cell_circles` → `filtered_cell_boundaries` → `cell_circles` when `--shapes-key` is at default)
 - `biological_policy_requested` / `_applied`, `patch_policy_requested` / `_applied`
-- `n_cells_source → n_after_biological_filter → n_after_positive_centroid → n_after_patch_policy → n_out`
+- `image_width_px`, `image_height_px` (level-0 H&E dimensions)
+- Sequential counters: `n_cells_source → n_after_biological_filter → n_after_shape_alignment → n_after_positive_centroid → n_after_patch_policy → n_out`. `n_after_biological_filter` is the Layer-1 row mask only; `n_after_shape_alignment` reflects the post-intersection count.
 - `drop_counts_by_reason` keyed on `missing_nucleus_boundary`, `unaligned_with_shapes`, `non_positive_centroid`, `full_oob`, `need_pad`, `requested_subsample`
 - `warnings` — emit them verbatim in the reply
 

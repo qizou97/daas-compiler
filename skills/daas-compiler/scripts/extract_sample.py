@@ -7,7 +7,7 @@ Usage:
       [--n-sample 3000] [--patch-size 224] [--mpp 0.5] \
       [--shard-size 500] [--seed 42]
 """
-import argparse, io, json, struct, tarfile, time
+import io, json, struct, tarfile, time
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +23,11 @@ from wsidata import open_wsi, TileSpec
 from wsidata.io import add_tiles
 import lazyslide.pl as lpl
 
+from daas.cli_args import (
+    DEFAULT_SHAPES_KEY,
+    DEFAULT_TABLE_KEY,
+    parse_extract_sample_args,
+)
 from daas.filtering import (
     BiologicalPolicy,
     PatchPolicy,
@@ -35,48 +40,15 @@ from daas.filtering import (
     write_filter_report,
 )
 
-DEFAULT_TABLE_KEY = "table"
-
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--zarr",        required=True)
-    p.add_argument("--output",      required=True)
-    p.add_argument("--sample-id",   default=None,
-                   help="样本 ID，默认从 zarr 目录名推断")
-    p.add_argument("--n-sample",    type=int, default=None,
-                   help="随机采样数量，默认处理全部有效细胞")
-    p.add_argument("--patch-size",  type=int, default=224)
-    p.add_argument("--mpp",         type=float, default=0.5)
-    p.add_argument("--shard-size",  type=int, default=500)
-    p.add_argument("--seed",        type=int, default=42)
-    p.add_argument("--image-key",   default="he_image")
-    p.add_argument("--shapes-key",  default="cell_circles")
-    p.add_argument("--table-key",   default=DEFAULT_TABLE_KEY)
-    p.add_argument("--extract-mode", default="tile_images",
-                   choices=["tile_images", "full_scale0", "full_ops_level"],
-                   help="Patch extraction strategy: tile_images (default, "
-                        "low mem), full_scale0 (fast, ~1.6 GB), "
-                        "full_ops_level (fastest, ~0.4 GB)")
-    p.add_argument("--biological-filter-policy",
-                   default=BiologicalPolicy.AUTO.value,
-                   choices=[p.value for p in BiologicalPolicy],
-                   help="Layer 1: cell-level filtering policy. 'auto' uses "
-                        "filtered_table when present and --table-key was not "
-                        "explicitly set; otherwise falls back to 'none'.")
-    p.add_argument("--patch-filter-policy",
-                   default=PatchPolicy.AUTO.value,
-                   choices=[p.value for p in PatchPolicy],
-                   help="Layer 2: patch-validity policy. 'auto' resolves to "
-                        "'strict_no_padding' (drop full_oob and need_pad). "
-                        "'stvisuome_minimal' keeps boundary-crossing tiles "
-                        "and is only valid with --extract-mode tile_images. "
-                        "'strict_with_padding' is reserved (raises).")
-    p.add_argument("--cell-id-column",        default="cell_id")
-    p.add_argument("--nucleus-boundaries-key", default="nucleus_boundaries")
-    p.add_argument("--filtered-table-key",    default="filtered_table")
-    p.add_argument("--filter-report-name",    default="filter_report.json")
-    return p.parse_args()
+    """Thin wrapper around the lightweight parser in daas.cli_args.
+
+    Defined here so that ``python3 extract_sample.py --help`` still works
+    via the module's own entrypoint. Policy combinations are validated at
+    parse time (e.g. ``stvisuome_minimal`` + ``full_*`` exits 2).
+    """
+    return parse_extract_sample_args()
 
 # ── IDX format ────────────────────────────────────────────────────────────────
 IDX_MAGIC      = b"CIDX0001"
@@ -241,6 +213,7 @@ def main():
         shapes_key=args.shapes_key,
         policy=bio_policy,
         table_key_was_default=(args.table_key == DEFAULT_TABLE_KEY),
+        shapes_key_was_default=(args.shapes_key == DEFAULT_SHAPES_KEY),
         filtered_table_key=args.filtered_table_key,
         nucleus_boundaries_key=args.nucleus_boundaries_key,
         cell_id_column=args.cell_id_column,
@@ -362,7 +335,8 @@ def main():
         patch_policy_requested=requested_patch_policy.value,
         patch_policy_applied=patch_policy_applied.value,
         n_cells_source=int(bio.n_cells_source),
-        n_after_biological_filter=int(adata.n_obs),
+        n_after_biological_filter=int(bio.n_after_biological_filter),
+        n_after_shape_alignment=int(adata.n_obs),
         n_after_positive_centroid=int(n_after_positive_centroid),
         n_after_patch_policy=int(n_after_patch_policy),
         n_out=int(n_out),
@@ -371,6 +345,8 @@ def main():
         target_mpp=float(MPP_TGT),
         slide_mpp=float(SLIDE_MPP),
         base_size=int(BASE_SIZE),
+        image_width_px=int(IMG_W),
+        image_height_px=int(IMG_H),
         seed=int(args.seed),
         warnings=list(bio.warnings),
     )
@@ -554,6 +530,13 @@ def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size,
               cell_id_column: str = "cell_id"):
     import io, tarfile
     from PIL import Image
+    if n_out == 0:
+        raise ValueError(
+            "No cells survived filtering — nothing to validate. "
+            "Inspect filter_report.json: drop_counts_by_reason should explain "
+            "where the cells went, and warnings should flag policy "
+            "misconfiguration."
+        )
     assert len(cells_df) == n_out == adata_out.n_obs
     assert cells_df["sample_key"].nunique() == n_out
     assert cells_df["cell_id"].nunique() == n_out
@@ -572,14 +555,15 @@ def _validate(cells_df, adata_out, adata_in, BASE_HALF, n_out, rng, patch_size,
     bbox_err = np.abs(cells_df["bbox_x0"].values
                       - (cells_df["center_x_pixel"].values - BASE_HALF))
     assert bbox_err.max() < 1.0
-    check_idx = rng.choice(n_out, 20, replace=False)
+    n_random = min(20, n_out)
+    check_idx = rng.choice(n_out, n_random, replace=False)
     for si in check_idx:
         row = cells_df.iloc[int(si)]
         with tarfile.open(row["shard_path"], "r") as tf:
             jpg = tf.extractfile(f"{row['sample_key']}.jpg").read()
         img = Image.open(io.BytesIO(jpg))
         assert img.size == (patch_size, patch_size)
-    print("  [PASS] all validation checks")
+    print(f"  [PASS] all validation checks (random JPEG sample size={n_random})")
 
 if __name__ == "__main__":
     main()

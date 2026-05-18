@@ -74,6 +74,14 @@ class BiologicalResolution:
     warnings: list
 
 
+# Preference order for canonical stVisuome shape layers when the user
+# accepted the default --shapes-key. Walked in this order; first match wins.
+CANONICAL_SHAPE_PREFERENCE: tuple = (
+    "filtered_cell_circles",
+    "filtered_cell_boundaries",
+)
+
+
 # ── Core helpers ──────────────────────────────────────────────────────────
 def get_table_cell_ids(adata, cell_id_column: str = "cell_id") -> pd.Series:
     """Return canonical cell IDs as strings, preserving row order."""
@@ -239,6 +247,37 @@ def resolve_patch_policy(policy: PatchPolicy, extract_mode: str) -> PatchPolicy:
     return policy
 
 
+def _pick_canonical_shape_key(
+    sdata, shapes_key: str, shapes_key_was_default: bool
+) -> tuple[str, list]:
+    """Return the shape key to use under stvisuome_canonical and any warnings.
+
+    When the user kept ``--shapes-key`` at the default, walk
+    :data:`CANONICAL_SHAPE_PREFERENCE` and pick the first match in
+    ``sdata.shapes``. When the user set ``--shapes-key`` explicitly, keep
+    that key and warn if a canonical filtered layer is also present.
+    """
+    warnings: list = []
+    if shapes_key_was_default:
+        for candidate in CANONICAL_SHAPE_PREFERENCE:
+            if candidate in sdata.shapes:
+                return candidate, warnings
+        return shapes_key, warnings
+
+    available_filtered = [
+        candidate
+        for candidate in CANONICAL_SHAPE_PREFERENCE
+        if candidate in sdata.shapes
+    ]
+    if available_filtered:
+        warnings.append(
+            f"stvisuome_canonical: --shapes-key was set explicitly to "
+            f"{shapes_key!r}; not auto-swapping. Filtered shape layers "
+            f"available: {available_filtered}."
+        )
+    return shapes_key, warnings
+
+
 def resolve_biological_policy(
     *,
     sdata,
@@ -246,6 +285,7 @@ def resolve_biological_policy(
     shapes_key: str,
     policy: BiologicalPolicy,
     table_key_was_default: bool,
+    shapes_key_was_default: bool = True,
     filtered_table_key: str = "filtered_table",
     nucleus_boundaries_key: str = "nucleus_boundaries",
     cell_id_column: str = "cell_id",
@@ -283,9 +323,13 @@ def resolve_biological_policy(
             )
         resolved_table = sdata.tables[filtered_table_key]
         n_source = int(resolved_table.n_obs)
+        resolved_shapes_key, shape_warnings = _pick_canonical_shape_key(
+            sdata, shapes_key, shapes_key_was_default
+        )
+        warnings = list(warnings) + shape_warnings
         return BiologicalResolution(
             table_key_used=filtered_table_key,
-            shapes_key_used=shapes_key,
+            shapes_key_used=resolved_shapes_key,
             policy_requested=requested,
             policy_applied=policy,
             keep_table_mask=None,
@@ -369,6 +413,7 @@ def build_filter_report(
     patch_policy_applied: str,
     n_cells_source: int,
     n_after_biological_filter: int,
+    n_after_shape_alignment: int,
     n_after_positive_centroid: int,
     n_after_patch_policy: int,
     n_out: int,
@@ -377,10 +422,21 @@ def build_filter_report(
     target_mpp: float,
     slide_mpp: float,
     base_size: int,
+    image_width_px: int,
+    image_height_px: int,
     seed: int,
     warnings: Sequence[str] = (),
 ) -> dict:
-    """Return a JSON-serializable filter report dict."""
+    """Return a JSON-serializable filter report dict.
+
+    Sequential filtering counters:
+      n_cells_source
+        → n_after_biological_filter   (Layer 1 row mask only)
+        → n_after_shape_alignment     (table↔shape alignment, may drop more)
+        → n_after_positive_centroid   (cx_px>0 & cy_px>0)
+        → n_after_patch_policy        (Layer 2)
+        → n_out                        (after optional --n-sample)
+    """
     return {
         "sample_id": str(sample_id),
         "zarr_path": str(zarr_path),
@@ -395,6 +451,7 @@ def build_filter_report(
         "patch_policy_applied": str(patch_policy_applied),
         "n_cells_source": int(n_cells_source),
         "n_after_biological_filter": int(n_after_biological_filter),
+        "n_after_shape_alignment": int(n_after_shape_alignment),
         "n_after_positive_centroid": int(n_after_positive_centroid),
         "n_after_patch_policy": int(n_after_patch_policy),
         "n_out": int(n_out),
@@ -403,6 +460,8 @@ def build_filter_report(
         "target_mpp": float(target_mpp),
         "slide_mpp": float(slide_mpp),
         "base_size": int(base_size),
+        "image_width_px": int(image_width_px),
+        "image_height_px": int(image_height_px),
         "seed": int(seed),
         "warnings": list(warnings),
     }

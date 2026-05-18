@@ -255,6 +255,91 @@ def test_biological_auto_does_not_override_explicit_table_key():
     assert any("auto" in w for w in res.warnings)
 
 
+def test_biological_canonical_prefers_filtered_cell_circles():
+    """When --shapes-key is default, prefer filtered_cell_circles if present."""
+    raw = _adata(["c0", "c1"])
+    flt = _adata(["c0", "c1"])
+    sdata = _sdata(
+        tables={"table": raw, "filtered_table": flt},
+        shapes={
+            "cell_circles": _gdf(["c0", "c1"]),
+            "filtered_cell_circles": _gdf(["c0", "c1"]),
+            "filtered_cell_boundaries": _gdf(["c0", "c1"]),
+        },
+    )
+    res = resolve_biological_policy(
+        sdata=sdata,
+        table_key="table",
+        shapes_key="cell_circles",
+        policy=BiologicalPolicy.STVISUOME_CANONICAL,
+        table_key_was_default=True,
+        shapes_key_was_default=True,
+    )
+    assert res.shapes_key_used == "filtered_cell_circles"
+
+
+def test_biological_canonical_falls_back_to_filtered_cell_boundaries():
+    raw = _adata(["c0", "c1"])
+    flt = _adata(["c0", "c1"])
+    sdata = _sdata(
+        tables={"table": raw, "filtered_table": flt},
+        shapes={
+            "cell_circles": _gdf(["c0", "c1"]),
+            "filtered_cell_boundaries": _gdf(["c0", "c1"]),
+        },
+    )
+    res = resolve_biological_policy(
+        sdata=sdata,
+        table_key="table",
+        shapes_key="cell_circles",
+        policy=BiologicalPolicy.STVISUOME_CANONICAL,
+        table_key_was_default=True,
+        shapes_key_was_default=True,
+    )
+    assert res.shapes_key_used == "filtered_cell_boundaries"
+
+
+def test_biological_canonical_falls_back_to_default_shapes_key():
+    raw = _adata(["c0", "c1"])
+    flt = _adata(["c0", "c1"])
+    sdata = _sdata(
+        tables={"table": raw, "filtered_table": flt},
+        shapes={"cell_circles": _gdf(["c0", "c1"])},
+    )
+    res = resolve_biological_policy(
+        sdata=sdata,
+        table_key="table",
+        shapes_key="cell_circles",
+        policy=BiologicalPolicy.STVISUOME_CANONICAL,
+        table_key_was_default=True,
+        shapes_key_was_default=True,
+    )
+    assert res.shapes_key_used == "cell_circles"
+
+
+def test_biological_canonical_preserves_explicit_shapes_key_with_warning():
+    raw = _adata(["c0"])
+    flt = _adata(["c0"])
+    sdata = _sdata(
+        tables={"table": raw, "filtered_table": flt},
+        shapes={
+            "cell_circles": _gdf(["c0"]),
+            "filtered_cell_circles": _gdf(["c0"]),
+            "custom_shapes": _gdf(["c0"]),
+        },
+    )
+    res = resolve_biological_policy(
+        sdata=sdata,
+        table_key="table",
+        shapes_key="custom_shapes",
+        policy=BiologicalPolicy.STVISUOME_CANONICAL,
+        table_key_was_default=True,
+        shapes_key_was_default=False,
+    )
+    assert res.shapes_key_used == "custom_shapes"
+    assert any("filtered_cell_circles" in w for w in res.warnings)
+
+
 def test_biological_canonical_raises_when_no_filtered_table():
     raw = _adata(["c0"])
     sdata = _sdata(tables={"table": raw}, shapes={"cell_circles": _gdf(["c0"])})
@@ -344,9 +429,12 @@ EXPECTED_REPORT_KEYS = {
     "biological_policy_requested", "biological_policy_applied",
     "patch_policy_requested", "patch_policy_applied",
     "n_cells_source", "n_after_biological_filter",
+    "n_after_shape_alignment",
     "n_after_positive_centroid", "n_after_patch_policy", "n_out",
     "drop_counts_by_reason", "patch_size", "target_mpp",
-    "slide_mpp", "base_size", "seed", "warnings",
+    "slide_mpp", "base_size",
+    "image_width_px", "image_height_px",
+    "seed", "warnings",
 }
 
 
@@ -365,6 +453,7 @@ def test_build_filter_report_serializes_to_disk(tmp_path):
         patch_policy_applied="strict_no_padding",
         n_cells_source=100,
         n_after_biological_filter=80,
+        n_after_shape_alignment=80,
         n_after_positive_centroid=78,
         n_after_patch_policy=70,
         n_out=50,
@@ -379,6 +468,8 @@ def test_build_filter_report_serializes_to_disk(tmp_path):
         target_mpp=0.5,
         slide_mpp=0.2125,
         base_size=527,
+        image_width_px=40000,
+        image_height_px=30000,
         seed=42,
         warnings=["example"],
     )
@@ -402,9 +493,12 @@ def test_write_filter_report_custom_name(tmp_path):
         patch_policy_requested="strict_no_padding",
         patch_policy_applied="strict_no_padding",
         n_cells_source=0, n_after_biological_filter=0,
+        n_after_shape_alignment=0,
         n_after_positive_centroid=0, n_after_patch_policy=0, n_out=0,
         drop_counts_by_reason={},
-        patch_size=1, target_mpp=0.0, slide_mpp=0.0, base_size=0, seed=0,
+        patch_size=1, target_mpp=0.0, slide_mpp=0.0, base_size=0,
+        image_width_px=0, image_height_px=0,
+        seed=0,
     )
     path = write_filter_report(report, tmp_path, name="alt.json")
     assert path.name == "alt.json"
