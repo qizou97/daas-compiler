@@ -1,6 +1,6 @@
 ---
 name: daas-compiler
-version: 0.7.7
+version: 0.7.8
 description: Extract cell-centered HE image patches from SpatialData into an indexed WebDataset for ML model training. Covers single-sample extraction, multi-sample parallel batch extraction, compile-step gene-intersection merge, and CellPatchDataset with LRU mmap loader. Use when building HE patch datasets for predicting gene expression from tissue morphology, or when scaling a single-sample pipeline to 10s–100s of zarr samples.
 ---
 
@@ -44,6 +44,39 @@ must use the argument names from this skill document verbatim. Never guess or in
 argument names. If the invocation is unclear, run `python3 <script> --help` first and
 read the output before constructing the call. Suppress stderr (`2>/dev/null`) only after
 a successful dry-run; otherwise always capture stderr so failures are visible.
+
+**Multi-sample parallel extraction must use `extract_all.py`.** Never use background
+bash loops, bare subprocess calls, or background Bash tool invocations to parallelize
+`extract_sample.py` across samples — these cannot capture failures and will silently drop
+samples. For multi-sample extraction, always use:
+```bash
+python3 "${SKILL_DIR}/scripts/extract_all.py" \
+    --zarr-dir <dir> --output <out> --workers <N> \
+    --samples A_001,A_002,A_004   # restrict to specific samples
+    # ... other extract_sample.py flags forwarded
+```
+`extract_all.py` exits with code 1 if any sample fails, prints the last 3k chars of
+stderr for each failure, and skips already-completed samples safely.
+
+**Verify all extractions before compiling.** After extraction (whether via `extract_all.py`
+or individual `extract_sample.py` calls), verify that every expected sample directory
+contains both `manifest.parquet` **and** `expression.h5ad` before calling
+`compile_dataset.py`. A missing file means that sample's extraction failed silently.
+Do not rely on Monitor tool output or background-task completion signals — only file
+system presence is authoritative.
+
+**Do not use Monitor output to assess extraction completion or cell counts.** The Monitor
+tool may display output from stale background processes started earlier in the session.
+The only reliable sources of truth are: the file system (`manifest.parquet` +
+`expression.h5ad` exist), and `filter_report.json` for definitive cell counts.
+
+**Read `filter_report.json` after every extraction and report drops to the user.**
+Each `{output}/{sample_id}/filter_report.json` contains the definitive
+`n_cells_source → n_out` count and `drop_counts_by_reason`. After extraction, read this
+file for every sample and check `drop_counts_by_reason`. If `full_oob` or `need_pad` is
+non-zero, explicitly tell the user how many cells were dropped and why (boundary cells
+that cannot yield a complete patch). Never report cell counts from progress-bar output
+or monitor streams — always read `filter_report.json`.
 
 **Ask before using existing filtered tables.** When `inspect_spatialdata.py` reports
 that `table_tissue`, `table_tissue_nucleus`, or any other pre-filtered table already
@@ -274,16 +307,22 @@ python3 ${SKILL_DIR}/scripts/filter_tissue.py \
 # Stage 2: nucleus_presence
 python3 ${SKILL_DIR}/scripts/filter_nucleus_presence.py \
     --zarr .../A_001.zarr \
-    --input-table-key table_tissue --output-table-key table_tissue_nucleus
+    --input-table-key table_tissue --output-table-key table_tissue_nucleus \
+    --nucleus-boundaries-key nucleus_boundaries
 # (repeat for A_002, A_004)
 
-# Stage 3: extract
-python3 ${SKILL_DIR}/scripts/extract_sample.py \
-    --zarr .../A_001.zarr \
-    --output .../stvisuome/A_001 \
+# Stage 3: extract (parallel via extract_all.py — never use background bash loops)
+python3 ${SKILL_DIR}/scripts/extract_all.py \
+    --zarr-dir .../spatialdata \
+    --output   .../stvisuome \
+    --workers  3 \
+    --samples  A_001,A_002,A_004 \
     --table-key table_tissue_nucleus \
     --extract-mode full_ops_level --mpp 0.5 --patch-size 224 --n-sample 3000
-# (repeat for A_002, A_004)
+
+# After extract_all.py completes: read filter_report.json for every sample and
+# report any non-zero drop_counts_by_reason (full_oob, need_pad) to the user.
+# Verify manifest.parquet + expression.h5ad exist in all sample dirs before compile.
 
 # Stage 4: compile
 python3 ${SKILL_DIR}/scripts/compile_dataset.py \
@@ -612,6 +651,7 @@ python3 "${SKILL_DIR}/scripts/extract_all.py" \
     --zarr-dir /data/spatialdata \
     --output   /data/out \
     --workers  4 \
+    [--samples A_001,A_002,A_004]   # restrict to these sample IDs; default: all
     [--n-sample 10000] [--pattern "*.zarr"]
     # all other extract_sample.py args forwarded
 ```

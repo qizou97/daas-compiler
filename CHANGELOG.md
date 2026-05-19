@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.8] - 2026-05-19
+
+### Added
+- `extract_all.py`: `--samples` flag (comma-separated) to restrict parallel extraction to a subset of samples in `--zarr-dir`
+
+### Changed
+- `SKILL.md` Agent Contract: four new rules
+  - Multi-sample parallel extraction must use `extract_all.py`; background bash loops are prohibited
+  - Pre-compile verification: agent must confirm `manifest.parquet` + `expression.h5ad` exist in all sample dirs before running `compile_dataset.py`
+  - Monitor tool output must not be used to assess extraction completion or read cell counts
+  - Agent must read `filter_report.json` after every extraction and report non-zero `drop_counts_by_reason` (`full_oob`, `need_pad`) to the user
+- `SKILL.md` worked example: added `--nucleus-boundaries-key nucleus_boundaries` explicitly to `filter_nucleus_presence.py` call; replaced per-sample `extract_sample.py` loop with `extract_all.py --samples`
+
+---
+
 ## [0.7.6] - 2026-05-19
 
 ### Changed (breaking vs 0.7.0)

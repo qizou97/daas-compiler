@@ -43,6 +43,9 @@ def parse_args():
                    help="Parallel worker processes (default: 4)")
     p.add_argument("--pattern",    default="*.zarr",
                    help="Glob pattern for zarr dirs (default: *.zarr)")
+    p.add_argument("--samples",    default=None,
+                   help="Comma-separated sample IDs to process (default: all). "
+                        "Example: --samples A_001,A_002,A_004")
     # forwarded to extract_sample.py
     p.add_argument("--n-sample",   type=int, default=None)
     p.add_argument("--patch-size", type=int, default=224)
@@ -68,6 +71,13 @@ def main():
     zarr_paths = sorted(Path(args.zarr_dir).glob(args.pattern))
     assert zarr_paths, \
         f"No zarr files found in {args.zarr_dir} matching '{args.pattern}'"
+
+    if args.samples:
+        allowed = set(s.strip() for s in args.samples.split(","))
+        zarr_paths = [zp for zp in zarr_paths if zp.stem in allowed]
+        assert zarr_paths, \
+            f"No zarr files matched --samples {args.samples!r} in {args.zarr_dir}"
+
     print(f"[extract_all] {len(zarr_paths)} samples, {args.workers} workers")
 
     extra: list[str] = []
