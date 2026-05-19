@@ -1,6 +1,6 @@
 ---
 name: daas-compiler
-version: 0.7.5
+version: 0.7.6
 description: Extract cell-centered HE image patches from SpatialData into an indexed WebDataset for ML model training. Covers single-sample extraction, multi-sample parallel batch extraction, compile-step gene-intersection merge, and CellPatchDataset with LRU mmap loader. Use when building HE patch datasets for predicting gene expression from tissue morphology, or when scaling a single-sample pipeline to 10s–100s of zarr samples.
 ---
 
@@ -182,17 +182,19 @@ user **before** generating CLI commands if it cannot be unambiguously inferred:
 - If there are multiple image keys (e.g. `he_image`, `dapi_image`), ask the
   user which one to use — do not assume.
 
-`allow_holes` defaults to `False` and may be passed silently. If the user
-explicitly mentions holes or tissue islands, ask whether `--allow-holes` should
-be set.
+`--allow-holes` defaults to `False`; pass it only when the user explicitly asks.
+`--key-added` defaults to `"tissue"`; always pass it explicitly so the shape key is predictable.
 
-**If a tissue shape already exists in `sdata.shapes`** (e.g. `region_of_interest`,
-`tissue_boundaries`, `tissue`), do NOT silently reuse it. Ask the user:
+**If the `--key-added` shape already exists in `sdata.shapes`**, do NOT run the
+script without asking. The script will warn but still overwrite. Ask the user first:
 
 > "Sample `<id>` already has a tissue shape `<key>` in its zarr. Re-run SOPA
-> tissue segmentation (overwrites it), or reuse the existing shape?"
+> tissue segmentation (will overwrite `<key>`), or skip segmentation and reuse
+> the existing shape for filtering?"
 
-Only pass `--key-added <key>` to skip SOPA after the user explicitly confirms reuse.
+- If user says **re-run**: run `filter_tissue.py` as planned (the script warns and proceeds).
+- If user says **reuse**: skip `filter_tissue.py` for this sample and pass
+  `--input-shape-key <key>` (or `--tissue-shapes-key <key>`) directly to `extract_sample.py`.
 
 ### Filter scripts write into the original zarr — confirm first
 

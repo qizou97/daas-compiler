@@ -1,13 +1,46 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 
-def run_tissue_segmentation(sdata, image_key: str) -> str:
-    """Always run SOPA tissue segmentation and return the created shape key.
+class TissueKeyExistsWarning(UserWarning):
+    """Emitted when SOPA creates no new shape key (updated an existing one in-place)."""
 
-    Diffs sdata.shapes before/after to discover the new key — never hardcodes
-    a key name. Raises RuntimeError if SOPA creates no new shape key.
+
+def run_tissue_segmentation(
+    sdata,
+    image_key: str,
+    allow_holes: bool = False,
+    key_added: str = "tissue",
+) -> str:
+    """Run SOPA tissue segmentation and return the created (or updated) shape key.
+
+    Parameters
+    ----------
+    sdata:
+        The SpatialData object. Must NOT already contain ``key_added`` — the
+        caller (script or agent) is responsible for confirming with the user
+        before calling this function when the key exists.
+    image_key:
+        Key of the H&E image in ``sdata.images``.
+    allow_holes:
+        Passed through to ``sopa.segmentation.tissue``. Default ``False``.
+    key_added:
+        Passed through to ``sopa.segmentation.tissue`` as the shape key name.
+        Default ``"tissue"``.
+
+    Returns
+    -------
+    str
+        The shape key added or updated by SOPA.
+
+    Warns
+    -----
+    TissueKeyExistsWarning
+        If SOPA creates no new shape key (it updated ``key_added`` in-place).
+        The function falls back to ``key_added`` or the first known tissue key.
     """
     try:
         import sopa.segmentation
@@ -16,18 +49,33 @@ def run_tissue_segmentation(sdata, image_key: str) -> str:
             "sopa is required for tissue segmentation. Install with: pip install sopa"
         )
     shapes_before = set(sdata.shapes.keys())
-    sopa.segmentation.tissue(sdata, image_key=image_key)
+    sopa.segmentation.tissue(
+        sdata, image_key=image_key, allow_holes=allow_holes, key_added=key_added
+    )
     new_keys = set(sdata.shapes.keys()) - shapes_before
     if not new_keys:
-        raise RuntimeError(
-            f"sopa.segmentation.tissue ran but created no new shape key. "
-            f"Shapes before: {sorted(shapes_before)}. "
-            f"Shapes after: {sorted(sdata.shapes.keys())}."
+        # SOPA updated key_added in-place rather than creating a new key.
+        _KNOWN = (key_added, "region_of_interest", "tissue_boundaries", "tissue")
+        for candidate in _KNOWN:
+            if candidate in sdata.shapes:
+                warnings.warn(
+                    f"sopa.segmentation.tissue created no new shape key "
+                    f"(updated {candidate!r} in-place). Using {candidate!r}.",
+                    TissueKeyExistsWarning,
+                    stacklevel=2,
+                )
+                return candidate
+        warnings.warn(
+            f"sopa.segmentation.tissue created no new shape key and no known "
+            f"tissue key found. Shapes: {sorted(sdata.shapes.keys())}.",
+            TissueKeyExistsWarning,
+            stacklevel=2,
         )
+        return key_added
     if len(new_keys) == 1:
         return new_keys.pop()
-    # Multiple new keys: prefer known tissue key names, else take sorted first.
-    _KNOWN = ("region_of_interest", "tissue_boundaries", "tissue")
+    # Multiple new keys: prefer key_added, then other known names, else sorted first.
+    _KNOWN = (key_added, "region_of_interest", "tissue_boundaries", "tissue")
     for candidate in _KNOWN:
         if candidate in new_keys:
             return candidate
@@ -59,4 +107,8 @@ def filter_by_tissue(
     return keep_mask, {"outside_tissue": n_dropped}
 
 
-__all__ = ["run_tissue_segmentation", "filter_by_tissue"]
+__all__ = [
+    "TissueKeyExistsWarning",
+    "run_tissue_segmentation",
+    "filter_by_tissue",
+]

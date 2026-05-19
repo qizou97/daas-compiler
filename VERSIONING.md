@@ -7,7 +7,7 @@ daas-compiler uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATC
 The package version (in `pyproject.toml`) and the skill version (referenced in `SKILL.md`
 and marketplace metadata) are kept in sync. When you bump one, bump the other.
 
-**Current baseline:** `0.7.5`
+**Current baseline:** `0.7.6`
 
 ## Pre-1.0 Policy
 

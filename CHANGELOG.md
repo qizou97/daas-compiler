@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.6] - 2026-05-19
+
+### Changed (breaking vs 0.7.0)
+- `run_tissue_segmentation`: restored `allow_holes: bool = False` and `key_added: str = "tissue"` parameters, passed through to `sopa.segmentation.tissue`
+- `run_tissue_segmentation`: no-new-key result is now a `TissueKeyExistsWarning` (not `RuntimeError`); falls back to `key_added` or first known tissue key
+- `filter_tissue.py`: restored `--allow-holes` and `--key-added` CLI flags (defaults `False` / `"tissue"`)
+- `filter_tissue.py`: prints a clear warning if `--key-added` already exists before running SOPA, so the agent can surface this to the user
+- `SKILL.md`: updated tissue segmentation guidance — agent must ask user before running `filter_tissue.py` when `key_added` shape already exists; documents re-run vs. reuse options
+
+---
+
 ## [0.7.5] - 2026-05-19
 
 ### Fixed

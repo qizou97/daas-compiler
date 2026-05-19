@@ -9,14 +9,22 @@ Usage:
       --output-table-key table_tissue \
       [--image-key he_image] \
       [--input-shape-key cell_circles] \
+      [--key-added tissue] \
+      [--allow-holes] \
       [--report-dir /data/reports]
 """
 import argparse
+import sys
+import warnings
 from pathlib import Path
 
 import spatialdata as sd
 
-from daas.filters.tissue import run_tissue_segmentation, filter_by_tissue
+from daas.filters.tissue import (
+    TissueKeyExistsWarning,
+    run_tissue_segmentation,
+    filter_by_tissue,
+)
 from daas.reports import StageReport, write_stage_report
 
 
@@ -29,6 +37,10 @@ def parse_args():
                    help="Default: {input_table_key}_tissue")
     p.add_argument("--image-key",        default="he_image",
                    help="Image key passed to SOPA tissue segmentation")
+    p.add_argument("--key-added",        default="tissue",
+                   help="Shape key SOPA writes the tissue boundaries to (default: tissue)")
+    p.add_argument("--allow-holes",      action="store_true", default=False,
+                   help="Pass allow_holes=True to SOPA tissue segmentation")
     p.add_argument("--cell-id-column",   default="cell_id")
     p.add_argument("--report-dir",       default=None)
     return p.parse_args()
@@ -74,8 +86,31 @@ def main():
             f"Available: {list(sdata.tables.keys())}"
         )
 
-    print(f"  running SOPA tissue segmentation (image_key={args.image_key!r}) …")
-    tissue_key = run_tissue_segmentation(sdata, image_key=args.image_key)
+    # Pre-run check: if the target tissue shape key already exists, the agent
+    # must have already confirmed with the user (per SKILL.md contract).
+    # Warn clearly so the agent/user can see what will be overwritten.
+    if args.key_added in sdata.shapes:
+        print(
+            f"  [warn] Tissue shape key {args.key_added!r} already exists in "
+            f"{zarr_path.name}. Re-running SOPA will overwrite it. "
+            f"(Agent should have confirmed this with the user before running.)"
+        )
+
+    print(
+        f"  running SOPA tissue segmentation "
+        f"(image_key={args.image_key!r}  key_added={args.key_added!r}  "
+        f"allow_holes={args.allow_holes}) …"
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", TissueKeyExistsWarning)
+        tissue_key = run_tissue_segmentation(
+            sdata,
+            image_key=args.image_key,
+            allow_holes=args.allow_holes,
+            key_added=args.key_added,
+        )
+    for w in caught:
+        print(f"  [warn] {w.message}")
     print(f"  tissue shape key: {tissue_key!r}")
 
     _save_tissue_viz(sdata, args.image_key, tissue_key, report_dir)
