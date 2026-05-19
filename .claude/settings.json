@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /home1/zouqi/codes/daas-compiler/claude_hook_prompt.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
