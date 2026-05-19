@@ -29,9 +29,36 @@ def parse_args():
                    help="Default: {input_table_key}_tissue")
     p.add_argument("--image-key",        default="he_image",
                    help="Image key passed to SOPA tissue segmentation")
+    p.add_argument("--key-added",        default=None,
+                   help="Shape key name for tissue output; if it already exists, "
+                        "segmentation is skipped")
+    p.add_argument("--allow-holes",      action="store_true", default=False,
+                   help="Allow holes inside tissue regions (default: False)")
     p.add_argument("--cell-id-column",   default="cell_id")
     p.add_argument("--report-dir",       default=None)
     return p.parse_args()
+
+
+def _save_tissue_viz(sdata, image_key: str, tissue_key: str, report_dir: Path) -> None:
+    """Save a tissue-overlay PNG for visual QC."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        viz_dir = report_dir / "viz"
+        viz_dir.mkdir(parents=True, exist_ok=True)
+        out_path = viz_dir / "tissue_overlay.png"
+
+        (
+            sdata
+            .pl.render_images(image_key)
+            .pl.render_shapes(tissue_key, fill_alpha=0.0, outline_width=0.5, outline_color="black")
+            .pl.show(save=str(out_path))
+        )
+        print(f"  viz → {out_path}")
+    except Exception as exc:
+        print(f"  [warn] tissue viz skipped: {exc}")
 
 
 def main():
@@ -51,9 +78,17 @@ def main():
             f"Available: {list(sdata.tables.keys())}"
         )
 
-    print(f"  running SOPA tissue segmentation (image_key={args.image_key!r}) …")
-    tissue_key = run_tissue_segmentation(sdata, image_key=args.image_key)
+    print(f"  running SOPA tissue segmentation (image_key={args.image_key!r}, "
+          f"allow_holes={args.allow_holes}, key_added={args.key_added!r}) …")
+    tissue_key = run_tissue_segmentation(
+        sdata,
+        image_key=args.image_key,
+        allow_holes=args.allow_holes,
+        key_added=args.key_added,
+    )
     print(f"  tissue shape key: {tissue_key!r}")
+
+    _save_tissue_viz(sdata, args.image_key, tissue_key, report_dir)
 
     adata = sdata.tables[args.input_table_key]
     cell_shapes = sdata.shapes[args.input_shape_key]

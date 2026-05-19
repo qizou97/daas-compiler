@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `run_tissue_segmentation` now accepts `allow_holes` and `key_added` parameters; skips SOPA if `key_added` already exists in `sdata.shapes`
+- `filter_tissue.py`: `--allow-holes` and `--key-added` CLI flags
+- `filter_tissue.py`: saves `viz/tissue_overlay.png` after segmentation for visual QC
+- `SKILL.md`: tissue segmentation confirmation rule — confirm `image_key` when multiple images exist; pass `--key-added` if shape already exists
+- `references/sopa-integration.md`: documented correct SOPA API signature (`allow_holes`, `key_added`) and interactive notebook viz snippet
 - Split policy: `splits/split_membership.parquet` and per-split JSON files (`splits/train.json` etc.) as the default L4 split representation
 - `split_schema_version` and `loader_config_schema_version` added to schema version table in VERSIONING.md
 - `release` and `deps` as explicit commit types in CONTRIBUTING.md

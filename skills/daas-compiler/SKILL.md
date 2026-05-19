@@ -141,6 +141,22 @@ Trigger phrase → stage mapping:
 | "optim_ops_level", "ops_level" | extract_mode=full_ops_level |
 | "sample N cells per sample" | --n-sample N |
 
+### Tissue segmentation — required confirmation
+
+When including `tissue_inside` in a stage plan, confirm `image_key` with the
+user **before** generating CLI commands if it cannot be unambiguously inferred:
+
+- If `sdata.images` has exactly one key, use it as the default without asking.
+- If there are multiple image keys (e.g. `he_image`, `dapi_image`), ask the
+  user which one to use — do not assume.
+
+`allow_holes` defaults to `False` and may be passed silently. If the user
+explicitly mentions holes or tissue islands, ask whether `--allow-holes` should
+be set.
+
+If the tissue shape already exists in `sdata.shapes`, pass `--key-added <key>`
+so that segmentation is skipped and the existing shape is reused.
+
 ### Stage report contract
 
 Every stage script writes a JSON to `--report-dir`:

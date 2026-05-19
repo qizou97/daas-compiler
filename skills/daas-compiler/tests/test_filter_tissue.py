@@ -34,18 +34,47 @@ def _make_tissue_polygon():
 
 # ── run_tissue_segmentation ──────────────────────────────────────────────────
 
-def test_run_tissue_segmentation_always_calls_sopa():
-    """SOPA must always be called, never skipped even if a tissue key exists."""
+def test_run_tissue_segmentation_calls_sopa_when_no_key_added():
+    """Without key_added, SOPA is always called and new key discovered by diff."""
     sdata = _make_sdata(["cell_circles"])
 
-    def fake_sopa(sd, image_key):
+    def fake_sopa(sd, **kwargs):
         sd.shapes["region_of_interest"] = MagicMock()
 
     with patch("sopa.segmentation.tissue", side_effect=fake_sopa) as mock_sopa:
         key = run_tissue_segmentation(sdata, image_key="he_image")
 
-    mock_sopa.assert_called_once_with(sdata, image_key="he_image")
+    mock_sopa.assert_called_once_with(sdata, image_key="he_image", allow_holes=False)
     assert key == "region_of_interest"
+
+
+def test_run_tissue_segmentation_skips_if_key_added_exists():
+    """If key_added is given and already in sdata.shapes, skip SOPA."""
+    sdata = _make_sdata(["cell_circles", "tissue"])
+
+    with patch("sopa.segmentation.tissue") as mock_sopa:
+        key = run_tissue_segmentation(sdata, image_key="he_image", key_added="tissue")
+
+    mock_sopa.assert_not_called()
+    assert key == "tissue"
+
+
+def test_run_tissue_segmentation_calls_sopa_with_key_added_when_absent():
+    """If key_added is given but not in shapes, call SOPA and pass key_added."""
+    sdata = _make_sdata(["cell_circles"])
+
+    def fake_sopa(sd, **kwargs):
+        sd.shapes["tissue"] = MagicMock()
+
+    with patch("sopa.segmentation.tissue", side_effect=fake_sopa) as mock_sopa:
+        key = run_tissue_segmentation(
+            sdata, image_key="he_image", allow_holes=True, key_added="tissue"
+        )
+
+    mock_sopa.assert_called_once_with(
+        sdata, image_key="he_image", allow_holes=True, key_added="tissue"
+    )
+    assert key == "tissue"
 
 
 def test_run_tissue_segmentation_raises_if_sopa_creates_nothing():

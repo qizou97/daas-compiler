@@ -3,12 +3,21 @@ from __future__ import annotations
 import numpy as np
 
 
-def run_tissue_segmentation(sdata, image_key: str) -> str:
-    """Always run SOPA tissue segmentation and return the created shape key.
+def run_tissue_segmentation(
+    sdata,
+    image_key: str,
+    allow_holes: bool = False,
+    key_added: str | None = None,
+) -> str:
+    """Run SOPA tissue segmentation and return the shape key.
 
+    Skips segmentation if key_added is given and already present in sdata.shapes.
     Diffs sdata.shapes before/after to discover the new key — never hardcodes
     a key name. Raises RuntimeError if SOPA creates no new shape key.
     """
+    if key_added is not None and key_added in sdata.shapes:
+        return key_added
+
     try:
         import sopa.segmentation
     except ImportError:
@@ -16,7 +25,10 @@ def run_tissue_segmentation(sdata, image_key: str) -> str:
             "sopa is required for tissue segmentation. Install with: pip install sopa"
         )
     shapes_before = set(sdata.shapes.keys())
-    sopa.segmentation.tissue(sdata, image_key=image_key)
+    kwargs: dict = {"image_key": image_key, "allow_holes": allow_holes}
+    if key_added is not None:
+        kwargs["key_added"] = key_added
+    sopa.segmentation.tissue(sdata, **kwargs)
     new_keys = set(sdata.shapes.keys()) - shapes_before
     if not new_keys:
         raise RuntimeError(
