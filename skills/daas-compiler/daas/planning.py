@@ -57,6 +57,8 @@ class StagePlan:
     compile_args: dict = field(default_factory=dict)
     final_table_key: str = "table"
     task_type: str = "he2st"
+    tissue_key: str = "tissue"
+    filtered_table_key: str = "filtered_table"
 
     @property
     def filter_stages(self) -> list[str]:
@@ -124,6 +126,8 @@ def parse_stage_plan(
     text: str,
     base_table_key: str = "table",
     base_shapes_key: str = "cell_circles",
+    tissue_key: str = "tissue",
+    filtered_table_key: str = "filtered_table",
 ) -> StagePlan:
     """Map a natural-language request string to a StagePlan.
 
@@ -154,6 +158,8 @@ def parse_stage_plan(
         extract_args=extract_args,
         compile_args=compile_args,
         final_table_key=final_key,
+        tissue_key=tissue_key,
+        filtered_table_key=filtered_table_key,
     )
 
 
@@ -182,12 +188,15 @@ def render_cli(
     for i, stage in enumerate(plan.stages, 1):
         lines.append(_sep(f"Stage {i}: {stage.name}"))
         for zp in zarr_paths:
-            lines.append(
+            cmd = (
                 f"python3 {skill_dir}/{stage.script} \\\n"
                 f"    --zarr {zp} \\\n"
                 f"    --input-table-key {stage.input_table_key} \\\n"
                 f"    --output-table-key {stage.output_table_key}"
             )
+            if stage.name == "tissue_inside":
+                cmd += f" \\\n    --tissue-key {plan.tissue_key}"
+            lines.append(cmd)
         lines.append("")
 
     # Extract stage

@@ -154,3 +154,48 @@ def test_render_cli_stage_order():
     pos_nucleus = cli.index("filter_nucleus_presence.py")
     pos_extract = cli.index("extract_sample.py")
     assert pos_tissue < pos_nucleus < pos_extract
+
+
+# ── tissue_key / filtered_table_key fields ────────────────────────────────
+
+def test_stage_plan_default_tissue_key():
+    plan = StagePlan()
+    assert plan.tissue_key == "tissue"
+
+
+def test_stage_plan_default_filtered_table_key():
+    plan = StagePlan()
+    assert plan.filtered_table_key == "filtered_table"
+
+
+def test_parse_stage_plan_default_tissue_key():
+    plan = parse_stage_plan("filter outside tissue")
+    assert plan.tissue_key == "tissue"
+
+
+def test_parse_stage_plan_custom_tissue_key():
+    plan = parse_stage_plan("filter outside tissue", tissue_key="my_tissue")
+    assert plan.tissue_key == "my_tissue"
+
+
+def test_parse_stage_plan_custom_filtered_table_key():
+    plan = parse_stage_plan("extract all", filtered_table_key="my_filtered")
+    assert plan.filtered_table_key == "my_filtered"
+
+
+def test_render_cli_tissue_inside_includes_tissue_key():
+    plan = parse_stage_plan("filter outside tissue")
+    cli = render_cli(plan, ["/data/A_001.zarr"], "/data/out")
+    assert "--tissue-key tissue" in cli
+
+
+def test_render_cli_tissue_inside_custom_tissue_key():
+    plan = parse_stage_plan("filter outside tissue", tissue_key="my_tissue")
+    cli = render_cli(plan, ["/data/A_001.zarr"], "/data/out")
+    assert "--tissue-key my_tissue" in cli
+
+
+def test_render_cli_nucleus_stage_no_tissue_key():
+    plan = parse_stage_plan("only keep cells with nucleus boundaries")
+    cli = render_cli(plan, ["/data/A_001.zarr"], "/data/out")
+    assert "--tissue-key" not in cli
