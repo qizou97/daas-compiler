@@ -141,6 +141,15 @@ Trigger phrase → stage mapping:
 | "optim_ops_level", "ops_level" | extract_mode=full_ops_level |
 | "sample N cells per sample" | --n-sample N |
 
+### `--n-sample` is strictly opt-in
+
+**Never add `--n-sample` unless the user explicitly states a cell count.**
+Omit the flag entirely when the user does not specify one — the default
+behaviour (`None`) processes all valid cells. Do not infer a count from
+previous conversations, do not suggest a "safe" default, and do not add it
+as a convenience. It is only valid when the user explicitly asks to subsample
+(e.g. "sample 3000 cells per sample", "use 5000 cells for a quick test").
+
 ### Tissue segmentation — required confirmation
 
 When including `tissue_inside` in a stage plan, confirm `image_key` with the
