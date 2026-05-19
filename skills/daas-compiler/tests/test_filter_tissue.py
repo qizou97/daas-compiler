@@ -126,7 +126,13 @@ def test_script_reuse_skips_segmentation_when_tissue_key_exists(tmp_path, capsys
     """When tissue_key already exists and --force is NOT set, SOPA must NOT be called."""
     import sys
     from unittest.mock import patch, MagicMock
-    import scripts.filter_tissue as ft_script
+    import importlib.util
+    import pathlib
+
+    _script_path = pathlib.Path(__file__).parent.parent / "scripts" / "filter_tissue.py"
+    spec = importlib.util.spec_from_file_location("filter_tissue", _script_path)
+    ft_script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ft_script)
 
     sdata, adata = _make_script_sdata("tissue")
 
@@ -145,8 +151,8 @@ def test_script_reuse_skips_segmentation_when_tissue_key_exists(tmp_path, capsys
 
     with patch("sys.argv", argv), \
          patch("spatialdata.read_zarr", return_value=sdata), \
-         patch("scripts.filter_tissue.run_tissue_segmentation") as mock_seg, \
-         patch("scripts.filter_tissue._save_tissue_viz"), \
+         patch.object(ft_script, "run_tissue_segmentation") as mock_seg, \
+         patch.object(ft_script, "_save_tissue_viz"), \
          patch("daas.reports.write_stage_report", return_value=report_dir / "r.json"):
         # Patch sdata write methods to be no-ops
         sdata.delete_element_from_disk = MagicMock()
@@ -165,7 +171,13 @@ def test_script_force_runs_segmentation_when_tissue_key_exists(tmp_path, capsys)
     """When tissue_key already exists and --force IS set, SOPA must be called."""
     import sys
     from unittest.mock import patch, MagicMock
-    import scripts.filter_tissue as ft_script
+    import importlib.util
+    import pathlib
+
+    _script_path = pathlib.Path(__file__).parent.parent / "scripts" / "filter_tissue.py"
+    spec = importlib.util.spec_from_file_location("filter_tissue", _script_path)
+    ft_script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ft_script)
 
     sdata, adata = _make_script_sdata("tissue")
 
@@ -185,9 +197,9 @@ def test_script_force_runs_segmentation_when_tissue_key_exists(tmp_path, capsys)
 
     with patch("sys.argv", argv), \
          patch("spatialdata.read_zarr", return_value=sdata), \
-         patch("scripts.filter_tissue.run_tissue_segmentation",
+         patch.object(ft_script, "run_tissue_segmentation",
                return_value="tissue") as mock_seg, \
-         patch("scripts.filter_tissue._save_tissue_viz"), \
+         patch.object(ft_script, "_save_tissue_viz"), \
          patch("daas.reports.write_stage_report", return_value=report_dir / "r.json"):
         sdata.delete_element_from_disk = MagicMock()
         sdata.__setitem__ = MagicMock()
