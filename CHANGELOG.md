@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.9] - 2026-05-19
+
+### Added
+- `inspect_spatialdata.py`: `--report-dir` flag writes `meta/inspect_report.json` (tables/shapes/images raw listing for agent cross-referencing)
+- `filter_tissue.py`: `--tissue-key` (replaces `--key-added`) with automatic existence check — skips SOPA when shape already present; `--force` to override
+- `planning.py` (`StagePlan`): new fields `tissue_key` (default `"tissue"`) and `filtered_table_key` (default `"filtered_table"`); `render_cli()` passes `--tissue-key` to `filter_tissue.py`
+
+### Changed
+- All per-sample pipeline reports unified under `{output}/{sample_id}/meta/`: `filter_report.json` moved from sample root; filter scripts (`filter_tissue.py`, `filter_nucleus_presence.py`, `filter_nucleus_overlap.py`) write to `--report-dir` only when explicitly given (no silent default)
+- `SKILL.md`: fixed stale extract-mode description, `compiled/wds/` path, duplicate boundary-transform section; updated reuse/re-run tissue workflow, `--tissue-key` CLI, inspect JSON guidance, `meta/` report paths
+
+---
+
 ## [0.7.8] - 2026-05-19
 
 ### Added
