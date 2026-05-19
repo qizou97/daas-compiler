@@ -111,11 +111,19 @@ sdata.zarr
 compiled/  or  per-sample bundled WebDataset shards
 ```
 
-### filtered_table is optional
+### filtered_table is optional — confirm before use
 
 `filtered_table` is not required. It is one possible `--input-table-key` value.
-If your zarr has a pre-existing `filtered_table`, pass it:
-`--input-table-key filtered_table` to the first stage script you run.
+
+**If inspect reveals a pre-existing `filtered_table` (or any other filtered table
+key) in a zarr, do NOT use it silently.** Stop and ask the user:
+
+> "Sample `<id>` already contains `filtered_table` in its zarr. Do you want to
+> use it directly as the starting table, or run the filter stages from scratch
+> starting from `table`?"
+
+Only pass `--input-table-key filtered_table` after the user explicitly confirms.
+If the user says to run from scratch, start from `--input-table-key table`.
 
 ### Building a stage plan from natural language
 
@@ -163,8 +171,33 @@ user **before** generating CLI commands if it cannot be unambiguously inferred:
 explicitly mentions holes or tissue islands, ask whether `--allow-holes` should
 be set.
 
-If the tissue shape already exists in `sdata.shapes`, pass `--key-added <key>`
-so that segmentation is skipped and the existing shape is reused.
+**If a tissue shape already exists in `sdata.shapes`** (e.g. `region_of_interest`,
+`tissue_boundaries`, `tissue`), do NOT silently reuse it. Ask the user:
+
+> "Sample `<id>` already has a tissue shape `<key>` in its zarr. Re-run SOPA
+> tissue segmentation (overwrites it), or reuse the existing shape?"
+
+Only pass `--key-added <key>` to skip SOPA after the user explicitly confirms reuse.
+
+### Filter scripts write into the original zarr — confirm first
+
+Every filter script (`filter_tissue.py`, `filter_nucleus_presence.py`,
+`filter_nucleus_overlap.py`) writes its output table (and optionally tissue
+shapes) **directly into the original zarr** via `sdata.write_element()`.
+
+**Before presenting the stage plan for approval, explicitly state** which keys
+will be written into each zarr and at what path. The stage plan approval acts as
+the user's confirmation. Do not run any filter script before the user approves
+the plan.
+
+Example disclosure in the stage plan:
+
+> **Zarr writes** (each filter stage writes back into the source zarr):
+> - `A_001.zarr` ← `table_tissue`, `region_of_interest` (tissue shape), `table_tissue_nucleus`
+> - `A_002.zarr` ← `table_tissue`, `region_of_interest`, `table_tissue_nucleus`
+> - `A_004.zarr` ← `table_tissue`, `region_of_interest`, `table_tissue_nucleus`
+
+If the user has not approved zarr writes, do not run the filter scripts.
 
 ### Stage report contract
 
