@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.5] - 2026-05-19
+
+### Fixed
+- `SKILL.md`: `--n-sample` is now strictly opt-in — agent must never add it
+  unless the user explicitly specifies a cell count; prevents silent subsampling
+  when no count was requested
+
+---
+
 ## [0.6.4] - 2026-05-19
 
 ### Fixed
