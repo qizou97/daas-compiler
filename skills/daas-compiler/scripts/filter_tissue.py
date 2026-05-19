@@ -76,9 +76,7 @@ def main():
     args = parse_args()
     zarr_path = Path(args.zarr)
     output_key = args.output_table_key or f"{args.input_table_key}_tissue"
-    report_dir = Path(args.report_dir) if args.report_dir else (
-        zarr_path.parent / "filter_reports"
-    )
+    report_dir = Path(args.report_dir) if args.report_dir else None
 
     print(f"[filter_tissue] {zarr_path.name}")
     sdata = sd.read_zarr(str(zarr_path))
@@ -117,7 +115,8 @@ def main():
             print(f"  [warn] {w.message}")
         print(f"  tissue shape key: {tissue_key!r}")
 
-    _save_tissue_viz(sdata, args.image_key, tissue_key, report_dir)
+    if report_dir is not None:
+        _save_tissue_viz(sdata, args.image_key, tissue_key, report_dir)
 
     adata = sdata.tables[args.input_table_key]
     cell_shapes = sdata.shapes[args.input_shape_key]
@@ -152,8 +151,9 @@ def main():
         n_cells_out=n_out,
         drop_counts_by_reason=drop_counts,
     )
-    path = write_stage_report(report, report_dir)
-    print(f"  report → {path}")
+    if report_dir is not None:
+        path = write_stage_report(report, report_dir)
+        print(f"  report → {path}")
 
 
 if __name__ == "__main__":

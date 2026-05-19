@@ -43,9 +43,7 @@ def main():
     args = parse_args()
     zarr_path = Path(args.zarr)
     output_key = args.output_table_key or f"{args.input_table_key}_he"
-    report_dir = Path(args.report_dir) if args.report_dir else (
-        zarr_path.parent / "filter_reports"
-    )
+    report_dir = Path(args.report_dir) if args.report_dir else None
 
     print(f"[filter_nucleus_overlap] {zarr_path.name}")
     sdata = sd.read_zarr(str(zarr_path))
@@ -96,8 +94,9 @@ def main():
         n_cells_out=n_out,
         drop_counts_by_reason=drop_counts,
     )
-    path = write_stage_report(report, report_dir)
-    print(f"  report → {path}")
+    if report_dir is not None:
+        path = write_stage_report(report, report_dir)
+        print(f"  report → {path}")
 
 
 if __name__ == "__main__":

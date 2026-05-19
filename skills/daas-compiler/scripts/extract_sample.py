@@ -245,7 +245,7 @@ def main():
         warnings=[],
     )
     report_path = write_filter_report(
-        report_dict, output_dir, name=args.filter_report_name
+        report_dict, output_dir / "meta", name=args.filter_report_name
     )
     print(f"      filter report → {report_path}")
 
