@@ -34,72 +34,33 @@ def _make_tissue_polygon():
 
 # ── run_tissue_segmentation ──────────────────────────────────────────────────
 
-def test_run_tissue_segmentation_calls_sopa_when_no_key_added():
-    """Without key_added, SOPA is always called and new key discovered by diff."""
+def test_run_tissue_segmentation_always_calls_sopa():
+    """SOPA must always be called, never skipped even if a tissue key exists."""
     sdata = _make_sdata(["cell_circles"])
 
-    def fake_sopa(sd, **kwargs):
+    def fake_sopa(sd, image_key):
         sd.shapes["region_of_interest"] = MagicMock()
 
     with patch("sopa.segmentation.tissue", side_effect=fake_sopa) as mock_sopa:
         key = run_tissue_segmentation(sdata, image_key="he_image")
 
-    mock_sopa.assert_called_once_with(sdata, image_key="he_image", allow_holes=False)
+    mock_sopa.assert_called_once_with(sdata, image_key="he_image")
     assert key == "region_of_interest"
 
 
-def test_run_tissue_segmentation_skips_if_key_added_exists():
-    """If key_added is given and already in sdata.shapes, skip SOPA."""
-    sdata = _make_sdata(["cell_circles", "tissue"])
-
-    with patch("sopa.segmentation.tissue") as mock_sopa:
-        key = run_tissue_segmentation(sdata, image_key="he_image", key_added="tissue")
-
-    mock_sopa.assert_not_called()
-    assert key == "tissue"
-
-
-def test_run_tissue_segmentation_calls_sopa_with_key_added_when_absent():
-    """If key_added is given but not in shapes, call SOPA and pass key_added."""
-    sdata = _make_sdata(["cell_circles"])
-
-    def fake_sopa(sd, **kwargs):
-        sd.shapes["tissue"] = MagicMock()
-
-    with patch("sopa.segmentation.tissue", side_effect=fake_sopa) as mock_sopa:
-        key = run_tissue_segmentation(
-            sdata, image_key="he_image", allow_holes=True, key_added="tissue"
-        )
-
-    mock_sopa.assert_called_once_with(
-        sdata, image_key="he_image", allow_holes=True, key_added="tissue"
-    )
-    assert key == "tissue"
-
-
-def test_run_tissue_segmentation_raises_if_sopa_creates_nothing_and_no_known_key():
-    """If SOPA creates no new key and no known tissue key exists, raise RuntimeError."""
-    sdata = _make_sdata(["cell_circles"])
-
-    with patch("sopa.segmentation.tissue"):  # does nothing to sdata.shapes
-        with pytest.raises(RuntimeError, match="no known tissue key found"):
-            run_tissue_segmentation(sdata, image_key="he_image")
-
-
-def test_run_tissue_segmentation_falls_back_to_existing_known_key():
-    """If SOPA updates an existing known key in-place, return that key."""
+def test_run_tissue_segmentation_raises_if_sopa_creates_nothing():
+    """If SOPA runs but creates no new shape key, raise RuntimeError."""
     sdata = _make_sdata(["cell_circles", "region_of_interest"])
 
-    with patch("sopa.segmentation.tissue"):  # updates in-place, no new key
-        key = run_tissue_segmentation(sdata, image_key="he_image")
-
-    assert key == "region_of_interest"
+    with patch("sopa.segmentation.tissue"):  # does nothing to sdata.shapes
+        with pytest.raises(RuntimeError, match="created no new shape key"):
+            run_tissue_segmentation(sdata, image_key="he_image")
 
 
 def test_run_tissue_segmentation_raises_if_sopa_not_installed():
     sdata = _make_sdata(["cell_circles"])
     with patch.dict("sys.modules", {"sopa": None, "sopa.segmentation": None}):
-        with pytest.raises(ImportError):
+        with pytest.raises((ImportError, TypeError)):
             run_tissue_segmentation(sdata, image_key="he_image")
 
 

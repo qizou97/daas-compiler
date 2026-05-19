@@ -21,6 +21,7 @@ _TISSUE_CANDIDATES = [
     "tissue_regions",
     "tissue_region",
     "filtered_tissue",
+    "region_of_interest",
 ]
 _CELL_CANDIDATES = [
     "filtered_cell_boundaries",
@@ -70,6 +71,7 @@ def save_tiles_overview(
     wsi,
     sdata=None,
     tissue_key: str | None = None,
+    image_key: str | None = None,
     scale_shape: float = 1.0,
     dpi: int = 300,
 ) -> dict:
@@ -86,8 +88,24 @@ def save_tiles_overview(
     viz_dir.mkdir(exist_ok=True)
     warnings = []
 
+    def _expand_to_full_slide(fig):
+        """Expand axes to the full slide extent so all tissue context is visible."""
+        if sdata is None or image_key is None:
+            return
+        try:
+            if image_key not in sdata.images:
+                return
+            scale0 = sdata.images[image_key]["scale0"]["image"]
+            _, img_h, img_w = scale0.shape
+            for ax in fig.axes:
+                ax.set_xlim(0, img_w)
+                ax.set_ylim(img_h, 0)
+        except Exception as e:
+            warnings.append(f"full-slide view expansion skipped: {e}")
+
     lpl.tiles(wsi, tile_key="cell_tiles")
     fig = plt.gcf()
+    _expand_to_full_slide(fig)
     out = viz_dir / "viz_global_tiles.png"
     fig.savefig(out, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -99,6 +117,7 @@ def save_tiles_overview(
             tissue_gdf = sdata.shapes[tissue_key]
             lpl.tiles(wsi, tile_key="cell_tiles")
             fig2 = plt.gcf()
+            _expand_to_full_slide(fig2)
             ax = fig2.axes[0]
             for geom in tissue_gdf.geometry:
                 if geom is None:

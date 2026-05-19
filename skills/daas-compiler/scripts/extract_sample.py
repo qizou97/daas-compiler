@@ -279,7 +279,7 @@ def main():
     # 6a. Global tiles overview (+ tissue overlay if key resolved)
     overview_result = save_tiles_overview(
         output_dir, wsi, sdata=sdata,
-        tissue_key=tissue_key, scale_shape=SCALE_SHAPE,
+        tissue_key=tissue_key, image_key=args.image_key, scale_shape=SCALE_SHAPE,
     )
     print(f"        → {overview_result['viz_global_tiles']}")
     if overview_result["viz_global_tiles_tissue_overlay"]:

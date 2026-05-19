@@ -3,21 +3,12 @@ from __future__ import annotations
 import numpy as np
 
 
-def run_tissue_segmentation(
-    sdata,
-    image_key: str,
-    allow_holes: bool = False,
-    key_added: str | None = None,
-) -> str:
-    """Run SOPA tissue segmentation and return the shape key.
+def run_tissue_segmentation(sdata, image_key: str) -> str:
+    """Always run SOPA tissue segmentation and return the created shape key.
 
-    Skips segmentation if key_added is given and already present in sdata.shapes.
     Diffs sdata.shapes before/after to discover the new key — never hardcodes
     a key name. Raises RuntimeError if SOPA creates no new shape key.
     """
-    if key_added is not None and key_added in sdata.shapes:
-        return key_added
-
     try:
         import sopa.segmentation
     except ImportError:
@@ -25,24 +16,18 @@ def run_tissue_segmentation(
             "sopa is required for tissue segmentation. Install with: pip install sopa"
         )
     shapes_before = set(sdata.shapes.keys())
-    kwargs: dict = {"image_key": image_key, "allow_holes": allow_holes}
-    if key_added is not None:
-        kwargs["key_added"] = key_added
-    sopa.segmentation.tissue(sdata, **kwargs)
+    sopa.segmentation.tissue(sdata, image_key=image_key)
     new_keys = set(sdata.shapes.keys()) - shapes_before
-    _KNOWN = ("region_of_interest", "tissue_boundaries", "tissue")
     if not new_keys:
-        # SOPA updated an existing key in-place (emits a warning but no new key).
-        for candidate in _KNOWN:
-            if candidate in sdata.shapes:
-                return candidate
         raise RuntimeError(
-            f"sopa.segmentation.tissue ran but created no new shape key and no "
-            f"known tissue key found. Shapes: {sorted(sdata.shapes.keys())}."
+            f"sopa.segmentation.tissue ran but created no new shape key. "
+            f"Shapes before: {sorted(shapes_before)}. "
+            f"Shapes after: {sorted(sdata.shapes.keys())}."
         )
     if len(new_keys) == 1:
         return new_keys.pop()
     # Multiple new keys: prefer known tissue key names, else take sorted first.
+    _KNOWN = ("region_of_interest", "tissue_boundaries", "tissue")
     for candidate in _KNOWN:
         if candidate in new_keys:
             return candidate
