@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.4] - 2026-05-19
+
+### Fixed
+- `SKILL.md`: agent was guessing `SKILL_DIR` from the plugin cache layout instead of reading the `Base directory for this skill:` line emitted by the skill loader, causing the first `scripts/` path attempt to be wrong. Now explicitly instructs the agent to use that system-provided path verbatim.
+
+---
+
 ## [0.7.3] - 2026-05-19
 
 ### Fixed

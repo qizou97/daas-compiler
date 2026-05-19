@@ -1,6 +1,6 @@
 ---
 name: daas-compiler
-version: 0.7.3
+version: 0.7.4
 description: Extract cell-centered HE image patches from SpatialData into an indexed WebDataset for ML model training. Covers single-sample extraction, multi-sample parallel batch extraction, compile-step gene-intersection merge, and CellPatchDataset with LRU mmap loader. Use when building HE patch datasets for predicting gene expression from tissue morphology, or when scaling a single-sample pipeline to 10s–100s of zarr samples.
 ---
 
@@ -82,9 +82,16 @@ pip install -r "${SKILL_DIR}/requirements.txt"
 After this, `from daas.dataset import CellPatchDataset` works in user code
 and all CLI scripts can be invoked via their full skill-relative path.
 
-`${SKILL_DIR}` denotes the absolute path of the directory containing this
-SKILL.md file. If imports fail, ask the user which Python interpreter to
-use; never hardcode a path.
+`${SKILL_DIR}` is the absolute path of the directory containing this SKILL.md
+file. When this skill loads, the system prints:
+
+```
+Base directory for this skill: <path>
+```
+
+**Set `SKILL_DIR` to exactly that `<path>` value.** Do not guess or construct
+the path from the plugin cache layout — read it from the system message.
+If imports fail, ask the user which Python interpreter to use; never hardcode a path.
 
 ---
 
