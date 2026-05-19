@@ -71,12 +71,12 @@ The only reliable sources of truth are: the file system (`manifest.parquet` +
 `expression.h5ad` exist), and `filter_report.json` for definitive cell counts.
 
 **Read `filter_report.json` after every extraction and report drops to the user.**
-Each `{output}/{sample_id}/filter_report.json` contains the definitive
+Each `{output}/{sample_id}/meta/filter_report.json` contains the definitive
 `n_cells_source → n_out` count and `drop_counts_by_reason`. After extraction, read this
 file for every sample and check `drop_counts_by_reason`. If `full_oob` or `need_pad` is
 non-zero, explicitly tell the user how many cells were dropped and why (boundary cells
 that cannot yield a complete patch). Never report cell counts from progress-bar output
-or monitor streams — always read `filter_report.json`.
+or monitor streams — always read `meta/filter_report.json`.
 
 **Ask before using existing filtered tables.** When `inspect_spatialdata.py` reports
 that `table_tissue`, `table_tissue_nucleus`, or any other pre-filtered table already
@@ -191,6 +191,8 @@ plan = parse_stage_plan(
 )
 # StagePlan fields available for presentation:
 #   plan.task_type        → str, e.g. "he2st"
+#   plan.tissue_key       → str, default "tissue" — passed to filter_tissue.py as --tissue-key
+#   plan.filtered_table_key → str, default "filtered_table" — agent checks inspect output against this key
 #   plan.filter_stages    → list[str], e.g. ["tissue_inside", "nucleus_presence"]
 #   plan.final_table_key  → str, e.g. "table_tissue_nucleus"
 #   plan.extract_args     → dict, e.g. {"mpp": 0.5, "patch_size": 224, ...}
@@ -228,18 +230,17 @@ user **before** generating CLI commands if it cannot be unambiguously inferred:
   user which one to use — do not assume.
 
 `--allow-holes` defaults to `False`; pass it only when the user explicitly asks.
-`--key-added` defaults to `"tissue"`; always pass it explicitly so the shape key is predictable.
+`--tissue-key` defaults to `"tissue"`; always pass it explicitly so the shape key is predictable.
 
-**If the `--key-added` shape already exists in `sdata.shapes`**, do NOT run the
+**If the `--tissue-key` shape already exists in `sdata.shapes`**, do NOT run the
 script without asking. The script will warn but still overwrite. Ask the user first:
 
 > "Sample `<id>` already has a tissue shape `<key>` in its zarr. Re-run SOPA
 > tissue segmentation (will overwrite `<key>`), or skip segmentation and reuse
 > the existing shape for filtering?"
 
-- If user says **re-run**: run `filter_tissue.py` as planned (the script warns and proceeds).
-- If user says **reuse**: skip `filter_tissue.py` for this sample and pass
-  `--input-shape-key <key>` (or `--tissue-shapes-key <key>`) directly to `extract_sample.py`.
+- If user says **re-run**: run `filter_tissue.py` with `--tissue-key <key> --force`. SOPA re-runs and overwrites the existing shape.
+- If user says **reuse**: run `filter_tissue.py` with `--tissue-key <key>` but WITHOUT `--force`. The script detects the key already exists and skips SOPA, using the existing shape directly for filtering.
 
 ### Filter scripts write into the original zarr — confirm first
 
@@ -295,9 +296,15 @@ Stage plan resolves to:
 Generated CLI (run in order):
 ```bash
 # Stage 0: inspect
-python3 ${SKILL_DIR}/scripts/inspect_spatialdata.py --zarr .../A_001.zarr
+python3 ${SKILL_DIR}/scripts/inspect_spatialdata.py \
+    --zarr .../A_001.zarr \
+    --report-dir .../stvisuome/A_001/meta
 # (repeat for A_002, A_004)
+```
 
+After inspect: if `--report-dir` is given, read `meta/inspect_report.json`. Check whether `plan.tissue_key` appears in `shapes[*].key` and `plan.filtered_table_key` appears in `tables[*].key`. If either exists, ask the user before proceeding.
+
+```bash
 # Stage 1: tissue_inside
 python3 ${SKILL_DIR}/scripts/filter_tissue.py \
     --zarr .../A_001.zarr \
