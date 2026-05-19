@@ -57,7 +57,9 @@ class StagePlan:
     compile_args: dict = field(default_factory=dict)
     final_table_key: str = "table"
     task_type: str = "he2st"
+    # Consumed by the agent layer and passed to filter_tissue.py as --tissue-key.
     tissue_key: str = "tissue"
+    # Consumed by the agent layer: inspect output is cross-referenced against this key.
     filtered_table_key: str = "filtered_table"
 
     @property
