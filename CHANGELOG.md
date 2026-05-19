@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.6.4] - 2026-05-19
+
+### Fixed
+- `run_tissue_segmentation`: fall back to existing known tissue key (`region_of_interest`, `tissue_boundaries`, `tissue`) when SOPA updates a shape in-place instead of creating a new one
+- `filter_tissue.py`: `--allow-holes` now accepts `--allow-holes false` in addition to the bare flag, preventing argparse error from callers that pass an explicit boolean string
+
+---
+
 ## [0.6.3] - 2026-05-19
 
 ### Added

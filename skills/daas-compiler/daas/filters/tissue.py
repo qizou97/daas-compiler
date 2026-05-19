@@ -30,16 +30,20 @@ def run_tissue_segmentation(
         kwargs["key_added"] = key_added
     sopa.segmentation.tissue(sdata, **kwargs)
     new_keys = set(sdata.shapes.keys()) - shapes_before
+    _KNOWN = ("region_of_interest", "tissue_boundaries", "tissue")
     if not new_keys:
+        # SOPA updated an existing key in-place (emits a warning but no new key).
+        for candidate in _KNOWN:
+            if candidate in sdata.shapes:
+                return candidate
         raise RuntimeError(
-            f"sopa.segmentation.tissue ran but created no new shape key. "
-            f"Shapes before: {sorted(shapes_before)}. "
-            f"Shapes after: {sorted(sdata.shapes.keys())}."
+            f"sopa.segmentation.tissue ran but created no new shape key and no "
+            f"known tissue key found. Shapes: {sorted(sdata.shapes.keys())}."
         )
     if len(new_keys) == 1:
         return new_keys.pop()
     # Multiple new keys: prefer known tissue key names, else take sorted first.
-    for candidate in ("region_of_interest", "tissue_boundaries", "tissue"):
+    for candidate in _KNOWN:
         if candidate in new_keys:
             return candidate
     return sorted(new_keys)[0]

@@ -77,13 +77,23 @@ def test_run_tissue_segmentation_calls_sopa_with_key_added_when_absent():
     assert key == "tissue"
 
 
-def test_run_tissue_segmentation_raises_if_sopa_creates_nothing():
-    """If SOPA runs but creates no new shape key, raise RuntimeError."""
+def test_run_tissue_segmentation_raises_if_sopa_creates_nothing_and_no_known_key():
+    """If SOPA creates no new key and no known tissue key exists, raise RuntimeError."""
     sdata = _make_sdata(["cell_circles"])
 
     with patch("sopa.segmentation.tissue"):  # does nothing to sdata.shapes
-        with pytest.raises(RuntimeError, match="created no new shape"):
+        with pytest.raises(RuntimeError, match="no known tissue key found"):
             run_tissue_segmentation(sdata, image_key="he_image")
+
+
+def test_run_tissue_segmentation_falls_back_to_existing_known_key():
+    """If SOPA updates an existing known key in-place, return that key."""
+    sdata = _make_sdata(["cell_circles", "region_of_interest"])
+
+    with patch("sopa.segmentation.tissue"):  # updates in-place, no new key
+        key = run_tissue_segmentation(sdata, image_key="he_image")
+
+    assert key == "region_of_interest"
 
 
 def test_run_tissue_segmentation_raises_if_sopa_not_installed():

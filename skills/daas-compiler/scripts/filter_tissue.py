@@ -32,7 +32,8 @@ def parse_args():
     p.add_argument("--key-added",        default=None,
                    help="Shape key name for tissue output; if it already exists, "
                         "segmentation is skipped")
-    p.add_argument("--allow-holes",      action="store_true", default=False,
+    p.add_argument("--allow-holes",      nargs="?", const=True, default=False,
+                   type=lambda x: x.lower() not in ("false", "0", "no", "n"),
                    help="Allow holes inside tissue regions (default: False)")
     p.add_argument("--cell-id-column",   default="cell_id")
     p.add_argument("--report-dir",       default=None)
