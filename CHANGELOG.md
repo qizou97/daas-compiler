@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.2] - 2026-05-19
+
+### Fixed
+- `SKILL.md`: agent must stop and confirm with user before using a pre-existing `filtered_table` found in a zarr — never pass it silently
+- `SKILL.md`: agent must stop and confirm before reusing an existing tissue shape from `sdata.shapes` — never silently pass `--key-added`
+- `SKILL.md`: stage plan must disclose all keys that will be written into the source zarrs; filter scripts must not run until user approves the plan
+
+---
+
 ## [0.7.1] - 2026-05-19
 
 ### Added
