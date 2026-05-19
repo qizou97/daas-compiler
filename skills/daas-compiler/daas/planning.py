@@ -56,6 +56,11 @@ class StagePlan:
     extract_args: dict = field(default_factory=dict)
     compile_args: dict = field(default_factory=dict)
     final_table_key: str = "table"
+    task_type: str = "he2st"
+
+    @property
+    def filter_stages(self) -> list[str]:
+        return [s.name for s in self.stages]
 
 
 # ── NL parsing helpers ────────────────────────────────────────────────────

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.5] - 2026-05-19
+
+### Fixed
+- `daas/planning.py`: `StagePlan` was missing `task_type` (str, default `"he2st"`) and `filter_stages` (property returning `[s.name for s in self.stages]`); agent code that accessed these attributes raised `AttributeError`
+- `SKILL.md`: updated `parse_stage_plan()` example to document all real `StagePlan` attributes so agents access existing fields, not imagined ones
+
+---
+
 ## [0.7.4] - 2026-05-19
 
 ### Fixed

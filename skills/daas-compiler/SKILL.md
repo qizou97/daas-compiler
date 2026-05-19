@@ -1,6 +1,6 @@
 ---
 name: daas-compiler
-version: 0.7.4
+version: 0.7.5
 description: Extract cell-centered HE image patches from SpatialData into an indexed WebDataset for ML model training. Covers single-sample extraction, multi-sample parallel batch extraction, compile-step gene-intersection merge, and CellPatchDataset with LRU mmap loader. Use when building HE patch datasets for predicting gene expression from tissue morphology, or when scaling a single-sample pipeline to 10s–100s of zarr samples.
 ---
 
@@ -144,6 +144,13 @@ plan = parse_stage_plan(
     "filter outside tissue, keep nucleus boundaries, "
     "mpp=0.5, patch size 224, use optim_ops_level, sample 3000 cells per sample"
 )
+# StagePlan fields available for presentation:
+#   plan.task_type        → str, e.g. "he2st"
+#   plan.filter_stages    → list[str], e.g. ["tissue_inside", "nucleus_presence"]
+#   plan.final_table_key  → str, e.g. "table_tissue_nucleus"
+#   plan.extract_args     → dict, e.g. {"mpp": 0.5, "patch_size": 224, ...}
+#   plan.compile_args     → dict, e.g. {"bundle_wds": True}
+#   plan.stages           → list[StageSpec] with .name/.script/.input_table_key/.output_table_key
 print(render_cli(plan, ["/data/A_001.zarr"], "/data/out"))
 ```
 
