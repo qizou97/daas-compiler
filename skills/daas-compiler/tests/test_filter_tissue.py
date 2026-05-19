@@ -38,23 +38,30 @@ def test_run_tissue_segmentation_always_calls_sopa():
     """SOPA must always be called, never skipped even if a tissue key exists."""
     sdata = _make_sdata(["cell_circles"])
 
-    def fake_sopa(sd, image_key):
+    def fake_sopa(sd, image_key, allow_holes=False, key_added="tissue"):
         sd.shapes["region_of_interest"] = MagicMock()
 
     with patch("sopa.segmentation.tissue", side_effect=fake_sopa) as mock_sopa:
         key = run_tissue_segmentation(sdata, image_key="he_image")
 
-    mock_sopa.assert_called_once_with(sdata, image_key="he_image")
+    mock_sopa.assert_called_once_with(
+        sdata, image_key="he_image", allow_holes=False, key_added="tissue"
+    )
     assert key == "region_of_interest"
 
 
-def test_run_tissue_segmentation_raises_if_sopa_creates_nothing():
-    """If SOPA runs but creates no new shape key, raise RuntimeError."""
-    sdata = _make_sdata(["cell_circles", "region_of_interest"])
+def test_run_tissue_segmentation_warns_if_sopa_creates_nothing():
+    """If SOPA updates the key in-place (no new key), emit TissueKeyExistsWarning
+    and return key_added."""
+    from daas.filters.tissue import TissueKeyExistsWarning
+
+    sdata = _make_sdata(["cell_circles", "tissue"])
 
     with patch("sopa.segmentation.tissue"):  # does nothing to sdata.shapes
-        with pytest.raises(RuntimeError, match="created no new shape key"):
-            run_tissue_segmentation(sdata, image_key="he_image")
+        with pytest.warns(TissueKeyExistsWarning, match="created no new shape key"):
+            key = run_tissue_segmentation(sdata, image_key="he_image")
+
+    assert key == "tissue"
 
 
 def test_run_tissue_segmentation_raises_if_sopa_not_installed():

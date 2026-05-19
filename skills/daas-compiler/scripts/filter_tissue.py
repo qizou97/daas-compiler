@@ -131,6 +131,8 @@ def main():
     print(f"  {n_in} → {n_out} cells  "
           f"(dropped {drop_counts.get('outside_tissue', 0)} outside tissue)")
 
+    if output_key in sdata.tables:
+        sdata.delete_element_from_disk(output_key)
     sdata[output_key] = filtered_adata
     sdata.write_element(output_key)
     print(f"  wrote {output_key!r} → {zarr_path}")

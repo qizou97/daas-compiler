@@ -76,6 +76,8 @@ def main():
           f"missing nucleus boundary)")
 
     # Write filtered table back into zarr
+    if output_key in sdata.tables:
+        sdata.delete_element_from_disk(output_key)
     sdata[output_key] = filtered_adata
     sdata.write_element(output_key)
     print(f"  wrote {output_key!r} → {zarr_path}")

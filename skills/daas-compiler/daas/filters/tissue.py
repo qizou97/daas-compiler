@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
+import shapely.affinity as _sa
 
 
 class TissueKeyExistsWarning(UserWarning):
@@ -55,31 +56,39 @@ def run_tissue_segmentation(
     new_keys = set(sdata.shapes.keys()) - shapes_before
     if not new_keys:
         # SOPA updated key_added in-place rather than creating a new key.
-        _KNOWN = (key_added, "region_of_interest", "tissue_boundaries", "tissue")
-        for candidate in _KNOWN:
-            if candidate in sdata.shapes:
-                warnings.warn(
-                    f"sopa.segmentation.tissue created no new shape key "
-                    f"(updated {candidate!r} in-place). Using {candidate!r}.",
-                    TissueKeyExistsWarning,
-                    stacklevel=2,
-                )
-                return candidate
         warnings.warn(
-            f"sopa.segmentation.tissue created no new shape key and no known "
-            f"tissue key found. Shapes: {sorted(sdata.shapes.keys())}.",
+            f"sopa.segmentation.tissue created no new shape key "
+            f"(updated {key_added!r} in-place). Using {key_added!r}.",
             TissueKeyExistsWarning,
             stacklevel=2,
         )
         return key_added
     if len(new_keys) == 1:
         return new_keys.pop()
-    # Multiple new keys: prefer key_added, then other known names, else sorted first.
-    _KNOWN = (key_added, "region_of_interest", "tissue_boundaries", "tissue")
-    for candidate in _KNOWN:
-        if candidate in new_keys:
-            return candidate
-    return sorted(new_keys)[0]
+    # Multiple new keys: prefer key_added if present, else sorted first.
+    return key_added if key_added in new_keys else sorted(new_keys)[0]
+
+
+def _gdf_to_coordinate_system(gdf, coordinate_system: str = "global"):
+    """Return a copy of *gdf* with geometries projected to *coordinate_system*.
+
+    Uses the SpatialData transformation stored on *gdf* (if any).  Falls back
+    to the identity so the function is safe when shapes carry no registered
+    transform.
+    """
+    try:
+        from spatialdata.transformations import get_transformation
+        t = get_transformation(gdf, to_coordinate_system=coordinate_system)
+        mat = t.to_affine_matrix(input_axes=("x", "y"), output_axes=("x", "y"))
+        a, b, xoff = mat[0, 0], mat[0, 1], mat[0, 2]
+        d, e, yoff = mat[1, 0], mat[1, 1], mat[1, 2]
+        result = gdf.copy()
+        result.geometry = gdf.geometry.apply(
+            lambda geom: _sa.affine_transform(geom, [a, b, d, e, xoff, yoff])
+        )
+        return result
+    except Exception:
+        return gdf
 
 
 def filter_by_tissue(
@@ -87,19 +96,28 @@ def filter_by_tissue(
     cell_shapes,
     tissue_shapes,
     cell_id_column: str = "cell_id",
+    coordinate_system: str = "global",
 ) -> tuple[np.ndarray, dict]:
     """Return (keep_mask, drop_counts) keeping cells whose centroid is inside
     any tissue polygon.
 
+    Both *cell_shapes* and *tissue_shapes* are projected to *coordinate_system*
+    (default ``"global"``) before the spatial join, so SOPA tissue ROIs (which
+    live in image pixel space) and Xenium cell shapes (in a different pixel
+    space) are compared in the same coordinate system.
+
     cell_shapes: GeoDataFrame with Point or Polygon geometries
     tissue_shapes: GeoDataFrame with Polygon geometries (tissue regions)
     """
+    cell_shapes_cs = _gdf_to_coordinate_system(cell_shapes, coordinate_system)
+    tissue_shapes_cs = _gdf_to_coordinate_system(tissue_shapes, coordinate_system)
+
     cell_ids = adata.obs[cell_id_column].astype(str)
-    cell_shapes_aligned = cell_shapes.loc[
-        cell_shapes.index.astype(str).isin(set(cell_ids.tolist()))
+    cell_shapes_aligned = cell_shapes_cs.loc[
+        cell_shapes_cs.index.astype(str).isin(set(cell_ids.tolist()))
     ]
     centroids = cell_shapes_aligned.geometry.centroid
-    tissue_union = tissue_shapes.geometry.union_all()
+    tissue_union = tissue_shapes_cs.geometry.union_all()
     inside = centroids.within(tissue_union)
     inside_series = inside.reindex(cell_ids.values, fill_value=False)
     keep_mask = inside_series.to_numpy(dtype=bool)
