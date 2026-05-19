@@ -7,35 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.6.3] - 2026-05-19
+
 ### Added
-- `run_tissue_segmentation` now accepts `allow_holes` and `key_added` parameters; skips SOPA if `key_added` already exists in `sdata.shapes`
+- `run_tissue_segmentation`: `allow_holes` and `key_added` parameters; skips SOPA when `key_added` already exists in `sdata.shapes`
 - `filter_tissue.py`: `--allow-holes` and `--key-added` CLI flags
 - `filter_tissue.py`: saves `viz/tissue_overlay.png` after segmentation for visual QC
 - `SKILL.md`: tissue segmentation confirmation rule — confirm `image_key` when multiple images exist; pass `--key-added` if shape already exists
-- `references/sopa-integration.md`: documented correct SOPA API signature (`allow_holes`, `key_added`) and interactive notebook viz snippet
-- Split policy: `splits/split_membership.parquet` and per-split JSON files (`splits/train.json` etc.) as the default L4 split representation
-- `split_schema_version` and `loader_config_schema_version` added to schema version table in VERSIONING.md
-- `release` and `deps` as explicit commit types in CONTRIBUTING.md
-- Worked HE2ST example in `references/agent-contract.md` showing full stage plan through L4
-- Table key propagation rule in agent contract
-- Split policy rule in agent contract and SKILL.md: default is metadata, not physical shard partitioning
+- `references/sopa-integration.md`: correct SOPA API signature (`allow_holes`, `key_added`) and interactive notebook viz snippet
+- Split policy: `splits/split_membership.parquet` and per-split JSON files as default L4 split representation
+- `split_schema_version` and `loader_config_schema_version` in VERSIONING.md schema table
+- `release` and `deps` commit types in CONTRIBUTING.md
+- Worked HE2ST example in `references/agent-contract.md`
+- Table key propagation rule and split policy rule in agent contract and SKILL.md
 
 ### Changed
-- L4 training-ready default layout: `data/shard-*.tar` + `splits/` metadata (no physical `train/`, `val/`, `test/` shard directories by default)
-- Physical `train/`, `val/`, `test/` shard partitioning is now an optional export mode only (`--materialize-split-shards`), not the default
-- Per-cell shard JSON no longer includes `split` field — split is determined at loader runtime from `splits/split_membership.parquet`
-- RELEASE.md smoke test step 3 updated to verify canonical layout and loader-runtime split selection
-- CONTRIBUTING.md PR checklist expanded with split/loader/gene order/visualization checks
+- L4 training-ready default layout: `data/shard-*.tar` + `splits/` metadata (no physical `train/`/`val/`/`test/` shard dirs by default)
+- Physical shard partitioning is now opt-in via `--materialize-split-shards`
+- Per-cell shard JSON no longer includes `split` field — determined at loader runtime from `splits/split_membership.parquet`
 - VERSIONING.md: added explicit MAJOR/MINOR/PATCH sections and split/loader contract rules
-- README.md: updated HE2ST training-ready layout to reflect canonical `data/` + `splits/` structure
+- README.md: updated HE2ST training-ready layout
 
 ### Fixed
-
-### Deprecated
-
-### Removed
-
-### Security
 
 ---
 
