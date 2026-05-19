@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-05-19
+
+### Changed (breaking)
+- `run_tissue_segmentation`: removed `allow_holes` and `key_added` parameters; always calls SOPA unconditionally and raises `RuntimeError` if no new shape key is created — eliminates silent reuse of pre-existing shapes
+- `filter_tissue.py`: removed `--allow-holes` and `--key-added` CLI flags
+
+### Fixed
+- `filter_tissue.py`: `_save_tissue_viz` now imports `spatialdata_plot` explicitly so the `.pl` accessor is registered on `sdata`; added `spatialdata-plot` and `matplotlib` to the `preprocess` optional-dependency group
+- `viz.save_tiles_overview`: expands axes to full slide extent after `lpl.tiles()` so `viz_global_tiles.png` shows global tissue context instead of zooming to the tiles bounding box; added `region_of_interest` to tissue key candidates
+
+---
+
 ## [0.6.5] - 2026-05-19
 
 ### Fixed
