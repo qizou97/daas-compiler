@@ -38,6 +38,18 @@ any schema version bumps required by `VERSIONING.md`.
 extraction, or task-ready packaging behavior. Any change to defaults must be announced
 to the user and reflected in the stage plan before execution.
 
+**Use documented CLI invocations exactly.** When calling any script (`filter_tissue.py`,
+`filter_nucleus_presence.py`, `extract_sample.py`, `compile_dataset.py`, etc.) the agent
+must use the argument names from this skill document verbatim. Never guess or invent
+argument names. If the invocation is unclear, run `python3 <script> --help` first and
+read the output before constructing the call. Suppress stderr (`2>/dev/null`) only after
+a successful dry-run; otherwise always capture stderr so failures are visible.
+
+**Ask before using existing filtered tables.** When `inspect_spatialdata.py` reports
+that `table_tissue`, `table_tissue_nucleus`, or any other pre-filtered table already
+exists in a zarr, the agent must ask the user whether to use the existing table or
+re-run the filter from scratch. Never auto-decide silently.
+
 **Consult reference docs for task-ready requests.** Before producing any L4 output plan:
 - `references/training-ready-contract.md` — what L4 requires
 - `references/artifact-levels.md` — level definitions and distinctions
