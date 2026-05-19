@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.3] - 2026-05-19
+
+### Fixed
+- `viz.save_tiles_overview`: tissue overlay was scaled using the cell_circles affine (`scale_shape`) instead of the tissue shapes' own SpatialData transformation, causing the tissue boundary to appear crammed into a corner. Now looks up `get_transformation(tissue_gdf, to_coordinate_system="global")` and applies the tissue shapes' own (x-scale, y-scale, x-translation, y-translation) to polygon vertices. Falls back to `scale_shape` with a warning if the lookup fails.
+
+---
+
 ## [0.7.2] - 2026-05-19
 
 ### Fixed

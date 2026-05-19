@@ -114,7 +114,26 @@ def save_tiles_overview(
     if tissue_key is not None and sdata is not None:
         try:
             from shapely.geometry import MultiPolygon
+            from spatialdata.transformations import get_transformation
             tissue_gdf = sdata.shapes[tissue_key]
+
+            # Tissue shapes may be in a different coordinate system than the
+            # display (level-0 pixel space). Use the tissue shapes' own
+            # transformation instead of the cell_circles-derived scale_shape.
+            try:
+                t_tf = get_transformation(tissue_gdf, to_coordinate_system="global")
+                t_aff = t_tf.to_affine_matrix(
+                    input_axes=("y", "x"), output_axes=("y", "x")
+                )
+                t_sx = float(t_aff[1, 1])   # x scale: intrinsic → global
+                t_sy = float(t_aff[0, 0])   # y scale: intrinsic → global
+                t_tx = float(t_aff[1, 2])   # x translation
+                t_ty = float(t_aff[0, 2])   # y translation
+            except Exception as e:
+                warnings.append(f"tissue transform lookup failed, falling back to scale_shape: {e}")
+                t_sx = t_sy = scale_shape
+                t_tx = t_ty = 0.0
+
             lpl.tiles(wsi, tile_key="cell_tiles")
             fig2 = plt.gcf()
             _expand_to_full_slide(fig2)
@@ -128,8 +147,8 @@ def save_tiles_overview(
                     for poly in polys:
                         xs, ys = poly.exterior.xy
                         ax.plot(
-                            [x * scale_shape for x in xs],
-                            [y * scale_shape for y in ys],
+                            [x * t_sx + t_tx for x in xs],
+                            [y * t_sy + t_ty for y in ys],
                             color="lime", linewidth=1.0, alpha=0.8,
                         )
                 except Exception as e:
