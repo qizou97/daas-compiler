@@ -1,6 +1,6 @@
 ---
 name: daas-compiler
-version: 0.7.9
+version: 0.7.10
 description: Extract cell-centered HE image patches from SpatialData into an indexed WebDataset for ML model training. Covers single-sample extraction, multi-sample parallel batch extraction, compile-step gene-intersection merge, and CellPatchDataset with LRU mmap loader. Use when building HE patch datasets for predicting gene expression from tissue morphology, or when scaling a single-sample pipeline to 10s–100s of zarr samples.
 ---
 
@@ -69,6 +69,18 @@ system presence is authoritative.
 tool may display output from stale background processes started earlier in the session.
 The only reliable sources of truth are: the file system (`manifest.parquet` +
 `expression.h5ad` exist), and `filter_report.json` for definitive cell counts.
+
+**Do not poll long-running filter stages with Monitor.** Filter stages across many samples
+can take 30–90 minutes. Do NOT create Monitor instances to poll progress — each Monitor
+event re-invokes Claude and floods the conversation. Instead:
+
+- Run the filter script with `run_in_background: true` in the Bash tool. The harness
+  automatically notifies when the subprocess exits — no polling needed.
+- If a progress check is truly needed, use `ScheduleWakeup` with `delaySeconds ≥ 300`
+  and a single `find … | wc -l` check on wake. One check per wake, then reschedule.
+- Never create more than one Monitor or ScheduleWakeup for the same background job.
+- When the background Bash task completes, verify via the filesystem (file counts,
+  `filter_report.json`) rather than parsing monitor output.
 
 **Read `filter_report.json` after every extraction and report drops to the user.**
 Each `{output}/{sample_id}/meta/filter_report.json` contains the definitive
