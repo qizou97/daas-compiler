@@ -14,21 +14,21 @@ def run_tissue_segmentation(
     sdata,
     image_key: str,
     allow_holes: bool = False,
-    key_added: str = "tissue",
+    tissue_key: str = "tissue",
 ) -> str:
     """Run SOPA tissue segmentation and return the created (or updated) shape key.
 
     Parameters
     ----------
     sdata:
-        The SpatialData object. Must NOT already contain ``key_added`` — the
+        The SpatialData object. Must NOT already contain ``tissue_key`` — the
         caller (script or agent) is responsible for confirming with the user
         before calling this function when the key exists.
     image_key:
         Key of the H&E image in ``sdata.images``.
     allow_holes:
         Passed through to ``sopa.segmentation.tissue``. Default ``False``.
-    key_added:
+    tissue_key:
         Passed through to ``sopa.segmentation.tissue`` as the shape key name.
         Default ``"tissue"``.
 
@@ -40,8 +40,8 @@ def run_tissue_segmentation(
     Warns
     -----
     TissueKeyExistsWarning
-        If SOPA creates no new shape key (it updated ``key_added`` in-place).
-        The function falls back to ``key_added`` or the first known tissue key.
+        If SOPA creates no new shape key (it updated ``tissue_key`` in-place).
+        The function falls back to ``tissue_key`` or the first known tissue key.
     """
     try:
         import sopa.segmentation
@@ -51,22 +51,22 @@ def run_tissue_segmentation(
         )
     shapes_before = set(sdata.shapes.keys())
     sopa.segmentation.tissue(
-        sdata, image_key=image_key, allow_holes=allow_holes, key_added=key_added
+        sdata, image_key=image_key, allow_holes=allow_holes, key_added=tissue_key
     )
     new_keys = set(sdata.shapes.keys()) - shapes_before
     if not new_keys:
-        # SOPA updated key_added in-place rather than creating a new key.
+        # SOPA updated tissue_key in-place rather than creating a new key.
         warnings.warn(
             f"sopa.segmentation.tissue created no new shape key "
-            f"(updated {key_added!r} in-place). Using {key_added!r}.",
+            f"(updated {tissue_key!r} in-place). Using {tissue_key!r}.",
             TissueKeyExistsWarning,
             stacklevel=2,
         )
-        return key_added
+        return tissue_key
     if len(new_keys) == 1:
         return new_keys.pop()
-    # Multiple new keys: prefer key_added if present, else sorted first.
-    return key_added if key_added in new_keys else sorted(new_keys)[0]
+    # Multiple new keys: prefer tissue_key if present, else sorted first.
+    return tissue_key if tissue_key in new_keys else sorted(new_keys)[0]
 
 
 def _gdf_to_coordinate_system(gdf, coordinate_system: str = "global"):

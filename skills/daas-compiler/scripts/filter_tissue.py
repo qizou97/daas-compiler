@@ -9,7 +9,8 @@ Usage:
       --output-table-key table_tissue \
       [--image-key he_image] \
       [--input-shape-key cell_circles] \
-      [--key-added tissue] \
+      [--tissue-key tissue] \
+      [--force] \
       [--allow-holes] \
       [--report-dir /data/reports]
 """
@@ -37,8 +38,10 @@ def parse_args():
                    help="Default: {input_table_key}_tissue")
     p.add_argument("--image-key",        default="he_image",
                    help="Image key passed to SOPA tissue segmentation")
-    p.add_argument("--key-added",        default="tissue",
+    p.add_argument("--tissue-key",        default="tissue",
                    help="Shape key SOPA writes the tissue boundaries to (default: tissue)")
+    p.add_argument("--force",            action="store_true", default=False,
+                   help="Re-run SOPA segmentation even if tissue_key already exists")
     p.add_argument("--allow-holes",      action="store_true", default=False,
                    help="Pass allow_holes=True to SOPA tissue segmentation")
     p.add_argument("--cell-id-column",   default="cell_id")
@@ -86,32 +89,33 @@ def main():
             f"Available: {list(sdata.tables.keys())}"
         )
 
-    # Pre-run check: if the target tissue shape key already exists, the agent
-    # must have already confirmed with the user (per SKILL.md contract).
-    # Warn clearly so the agent/user can see what will be overwritten.
-    if args.key_added in sdata.shapes:
+    if args.tissue_key in sdata.shapes and not args.force:
         print(
-            f"  [warn] Tissue shape key {args.key_added!r} already exists in "
-            f"{zarr_path.name}. Re-running SOPA will overwrite it. "
-            f"(Agent should have confirmed this with the user before running.)"
+            f"  [reuse] tissue shape {args.tissue_key!r} already exists — "
+            f"skipping SOPA segmentation (use --force to re-run)"
         )
-
-    print(
-        f"  running SOPA tissue segmentation "
-        f"(image_key={args.image_key!r}  key_added={args.key_added!r}  "
-        f"allow_holes={args.allow_holes}) …"
-    )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always", TissueKeyExistsWarning)
-        tissue_key = run_tissue_segmentation(
-            sdata,
-            image_key=args.image_key,
-            allow_holes=args.allow_holes,
-            key_added=args.key_added,
+        tissue_key = args.tissue_key
+    else:
+        if args.tissue_key in sdata.shapes and args.force:
+            print(
+                f"  [force] re-running SOPA segmentation, will overwrite {args.tissue_key!r}"
+            )
+        print(
+            f"  running SOPA tissue segmentation "
+            f"(image_key={args.image_key!r}  tissue_key={args.tissue_key!r}  "
+            f"allow_holes={args.allow_holes}) …"
         )
-    for w in caught:
-        print(f"  [warn] {w.message}")
-    print(f"  tissue shape key: {tissue_key!r}")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", TissueKeyExistsWarning)
+            tissue_key = run_tissue_segmentation(
+                sdata,
+                image_key=args.image_key,
+                allow_holes=args.allow_holes,
+                tissue_key=args.tissue_key,
+            )
+        for w in caught:
+            print(f"  [warn] {w.message}")
+        print(f"  tissue shape key: {tissue_key!r}")
 
     _save_tissue_viz(sdata, args.image_key, tissue_key, report_dir)
 

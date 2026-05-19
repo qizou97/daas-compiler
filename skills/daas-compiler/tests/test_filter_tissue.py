@@ -98,3 +98,104 @@ def test_filter_by_tissue_all_outside():
     keep_mask, drop_counts = filter_by_tissue(adata, cell_shapes, tissue)
     assert keep_mask.sum() == 0
     assert drop_counts["outside_tissue"] == 2
+
+
+# ── filter_tissue.py script: --force / reuse logic ───────────────────────────
+
+def _make_script_sdata(tissue_key="tissue"):
+    """Minimal sdata mock suitable for script-level tests."""
+    cell_ids = ["c0", "c1"]
+    adata = _make_adata(cell_ids)
+    tissue_shapes = _make_tissue_polygon()
+    cell_shapes = gpd.GeoDataFrame(
+        geometry=[Point(50, 50), Point(150, 150)],
+        index=pd.Index(cell_ids),
+    )
+
+    sdata = MagicMock()
+    sdata.shapes = {
+        "cell_circles": cell_shapes,
+        tissue_key: tissue_shapes,
+    }
+    sdata.tables = {"table": adata}
+    sdata.__getitem__ = MagicMock(return_value=adata)
+    return sdata, adata
+
+
+def test_script_reuse_skips_segmentation_when_tissue_key_exists(tmp_path, capsys):
+    """When tissue_key already exists and --force is NOT set, SOPA must NOT be called."""
+    import sys
+    from unittest.mock import patch, MagicMock
+    import scripts.filter_tissue as ft_script
+
+    sdata, adata = _make_script_sdata("tissue")
+
+    report_dir = tmp_path / "reports"
+    zarr_path = tmp_path / "sample.zarr"
+    zarr_path.mkdir()
+
+    argv = [
+        "filter_tissue.py",
+        "--zarr", str(zarr_path),
+        "--input-table-key", "table",
+        "--output-table-key", "table_tissue",
+        "--tissue-key", "tissue",
+        "--report-dir", str(report_dir),
+    ]
+
+    with patch("sys.argv", argv), \
+         patch("spatialdata.read_zarr", return_value=sdata), \
+         patch("scripts.filter_tissue.run_tissue_segmentation") as mock_seg, \
+         patch("scripts.filter_tissue._save_tissue_viz"), \
+         patch("daas.reports.write_stage_report", return_value=report_dir / "r.json"):
+        # Patch sdata write methods to be no-ops
+        sdata.delete_element_from_disk = MagicMock()
+        sdata.__setitem__ = MagicMock()
+        sdata.write_element = MagicMock()
+
+        ft_script.main()
+
+    mock_seg.assert_not_called()
+    captured = capsys.readouterr()
+    assert "[reuse]" in captured.out
+    assert "skipping SOPA" in captured.out
+
+
+def test_script_force_runs_segmentation_when_tissue_key_exists(tmp_path, capsys):
+    """When tissue_key already exists and --force IS set, SOPA must be called."""
+    import sys
+    from unittest.mock import patch, MagicMock
+    import scripts.filter_tissue as ft_script
+
+    sdata, adata = _make_script_sdata("tissue")
+
+    report_dir = tmp_path / "reports"
+    zarr_path = tmp_path / "sample.zarr"
+    zarr_path.mkdir()
+
+    argv = [
+        "filter_tissue.py",
+        "--zarr", str(zarr_path),
+        "--input-table-key", "table",
+        "--output-table-key", "table_tissue",
+        "--tissue-key", "tissue",
+        "--force",
+        "--report-dir", str(report_dir),
+    ]
+
+    with patch("sys.argv", argv), \
+         patch("spatialdata.read_zarr", return_value=sdata), \
+         patch("scripts.filter_tissue.run_tissue_segmentation",
+               return_value="tissue") as mock_seg, \
+         patch("scripts.filter_tissue._save_tissue_viz"), \
+         patch("daas.reports.write_stage_report", return_value=report_dir / "r.json"):
+        sdata.delete_element_from_disk = MagicMock()
+        sdata.__setitem__ = MagicMock()
+        sdata.write_element = MagicMock()
+
+        ft_script.main()
+
+    mock_seg.assert_called_once()
+    captured = capsys.readouterr()
+    assert "[force]" in captured.out
+    assert "overwrite" in captured.out
