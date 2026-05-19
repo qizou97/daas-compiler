@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.1] - 2026-05-19
+
+### Added
+- Implementation plan for fixing SOPA filter fallbacks (`docs/superpowers/plans/2026-05-19-fix-sopa-filter-fallbacks.md`)
+
+---
+
 ## [0.7.0] - 2026-05-19
 
 ### Changed (breaking)
