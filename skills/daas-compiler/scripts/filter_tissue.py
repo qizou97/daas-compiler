@@ -96,7 +96,7 @@ def main():
         )
         tissue_key = args.tissue_key
     else:
-        if args.tissue_key in sdata.shapes and args.force:
+        if args.force:
             print(
                 f"  [force] re-running SOPA segmentation, will overwrite {args.tissue_key!r}"
             )
