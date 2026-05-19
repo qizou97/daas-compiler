@@ -197,6 +197,7 @@ def main():
 
     sample_dirs = sorted(d for d in per_sample.iterdir()
                          if d.is_dir()
+                         and d.resolve() != compiled.resolve()
                          and (d / "manifest.parquet").exists()
                          and (d / "expression.h5ad").exists())
     assert sample_dirs, f"No valid sample dirs found in {per_sample}"
@@ -244,8 +245,11 @@ def main():
     sliced = [a[:, gene_panel].copy() for a in adatas]
     validate_gene_panel(sliced, sample_names, gene_panel)
 
+    for adata, sample_name in zip(sliced, sample_names):
+        adata.obs_names = pd.Index(
+            [f"{sample_name}/{name}" for name in adata.obs_names]
+        )
     combined = anndata.concat(sliced, axis=0, merge="same")
-    combined.obs_names_make_unique()
     assert list(combined.var_names) == gene_panel, \
         "combined var_names != gene_panel after concat"
 
