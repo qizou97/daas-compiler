@@ -308,7 +308,8 @@ After inspect: if `--report-dir` is given, read `meta/inspect_report.json`. Chec
 # Stage 1: tissue_inside
 python3 ${SKILL_DIR}/scripts/filter_tissue.py \
     --zarr .../A_001.zarr \
-    --input-table-key table --output-table-key table_tissue
+    --input-table-key table --output-table-key table_tissue \
+    --tissue-key tissue
 # (repeat for A_002, A_004)
 
 # Stage 2: nucleus_presence
